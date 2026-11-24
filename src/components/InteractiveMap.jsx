@@ -1,139 +1,240 @@
-import React from 'react';
-import { Zap, Shield, Navigation } from 'lucide-react';
-import { PUBLIC_DC_HUBS } from '../data/mockData';
+import React, { useEffect, useRef } from 'react';
+import L from 'leaflet';
+import { Plus, Minus, Maximize2, Zap } from 'lucide-react';
+import { PUBLIC_DC_HUBS, CHARGING_GAP_ZONES, CZ_BOUNDS } from '../data/mockData';
+import { addBaseLayer, priceIcon, dcIcon, zoneLabelIcon, routeLabelIcon } from '../lib/mapConfig';
 
+/**
+ * Real geographic map of Czechia (Leaflet + OpenStreetMap/CARTO tiles).
+ * - P2P stations rendered as price pins at their *public* (obfuscated) position
+ * - Rural charging-gap zones (SO1) as dashed circles
+ * - Optional overlay of commercial highway DC hubs for comparison
+ * - Selecting a station flies to it and draws the 250 m privacy circle (NFR-03)
+ */
 export default function InteractiveMap({
   stations,
   selectedStation,
   onSelectStation,
   showPublicDcOverlay,
-  setShowPublicDcOverlay
+  setShowPublicDcOverlay,
+  route // optional trip scenario: { legs:[{path, terrainFactor}], continuationPath }
 }) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const layersRef = useRef({});
+  const onSelectRef = useRef(onSelectStation);
+  onSelectRef.current = onSelectStation;
+  const lastFlownId = useRef(selectedStation?.id);
+
+  const fitCountry = (animate = true) => {
+    mapRef.current?.fitBounds(CZ_BOUNDS, { padding: [8, 8], animate });
+  };
+
+  // 1) Create the map once
+  useEffect(() => {
+    const map = L.map(containerRef.current, {
+      zoomControl: false,
+      zoomSnap: 0.25,
+      minZoom: 6,
+      maxZoom: 18,
+      maxBounds: L.latLngBounds(CZ_BOUNDS).pad(0.35),
+      worldCopyJump: false
+    });
+    addBaseLayer(map);
+    map.fitBounds(CZ_BOUNDS, { padding: [8, 8], animate: false });
+
+    const zones = L.layerGroup().addTo(map);
+    CHARGING_GAP_ZONES.forEach((z) => {
+      L.circle([z.lat, z.lng], {
+        radius: z.radiusKm * 1000,
+        color: '#10b981',
+        weight: 1.4,
+        dashArray: '4 4',
+        fillColor: '#10b981',
+        fillOpacity: 0.1,
+        interactive: false
+      }).addTo(zones);
+      L.marker([z.lat - z.radiusKm / 111, z.lng], {
+        icon: zoneLabelIcon(z.label),
+        interactive: false,
+        keyboard: false
+      }).addTo(zones);
+    });
+
+    layersRef.current = {
+      route: L.layerGroup().addTo(map),
+      dc: L.layerGroup().addTo(map),
+      privacy: L.layerGroup().addTo(map),
+      stations: L.layerGroup().addTo(map)
+    };
+    mapRef.current = map;
+
+    const t = setTimeout(() => map.invalidateSize(), 50);
+    return () => {
+      clearTimeout(t);
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  // 2) Station price pins + privacy circle
+  useEffect(() => {
+    const { stations: group, privacy } = layersRef.current;
+    if (!group) return;
+    group.clearLayers();
+    privacy.clearLayers();
+
+    stations.forEach((st) => {
+      const selected = st.id === selectedStation?.id;
+      const marker = L.marker([st.lat, st.lng], {
+        icon: priceIcon(st, selected),
+        zIndexOffset: selected ? 1000 : 0,
+        keyboard: false,
+        title: st.title
+      });
+      marker.on('click', () => onSelectRef.current(st));
+      group.addLayer(marker);
+
+      if (selected) {
+        L.circle([st.lat, st.lng], {
+          radius: 250,
+          color: '#059669',
+          weight: 1.5,
+          dashArray: '4 3',
+          fillColor: '#10b981',
+          fillOpacity: 0.16,
+          interactive: false
+        }).addTo(privacy);
+      }
+    });
+  }, [stations, selectedStation?.id]);
+
+  // 3) Fly to a newly selected station (not on first render: keep the country overview)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !selectedStation) return;
+    if (lastFlownId.current === selectedStation.id) return;
+    lastFlownId.current = selectedStation.id;
+    if (!stations.some((s) => s.id === selectedStation.id)) return;
+    map.flyTo([selectedStation.lat, selectedStation.lng], 13, { duration: 0.9 });
+  }, [selectedStation?.id, stations]);
+
+  // 4) Road-trip route (Prague -> Berlin detour)
+  useEffect(() => {
+    const map = mapRef.current;
+    const { route: group } = layersRef.current;
+    if (!map || !group) return;
+    group.clearLayers();
+    if (!route) return;
+
+    const all = [];
+    route.legs.forEach((leg) => {
+      const hilly = leg.terrainFactor >= 1.2;
+      L.polyline(leg.path, { color: '#ffffff', weight: 8, opacity: 0.9, interactive: false }).addTo(group);
+      L.polyline(leg.path, {
+        color: hilly ? '#f59e0b' : '#0284c7',
+        weight: 4.5,
+        dashArray: hilly ? '6 6' : null,
+        lineCap: 'round',
+        interactive: false
+      }).addTo(group);
+      all.push(...leg.path);
+    });
+    if (route.continuationPath) {
+      L.polyline(route.continuationPath, {
+        color: '#64748b',
+        weight: 3,
+        dashArray: '2 7',
+        lineCap: 'round',
+        interactive: false
+      }).addTo(group);
+      const end = route.continuationPath[route.continuationPath.length - 1];
+      L.marker(end, { icon: routeLabelIcon('to Berlin ↑'), interactive: false }).addTo(group);
+    }
+    const first = route.legs[0].path[0];
+    const last = route.legs[route.legs.length - 1].path.slice(-1)[0];
+    L.marker(first, { icon: routeLabelIcon('Prague'), interactive: false }).addTo(group);
+    L.marker(last, { icon: routeLabelIcon('Dresden DC'), interactive: false }).addTo(group);
+
+    map.fitBounds(L.latLngBounds(all), { padding: [36, 36] });
+  }, [route]);
+
+  // 5) Public DC overlay
+  useEffect(() => {
+    const { dc } = layersRef.current;
+    if (!dc) return;
+    dc.clearLayers();
+    if (!showPublicDcOverlay) return;
+    PUBLIC_DC_HUBS.forEach((hub) => {
+      L.marker([hub.lat, hub.lng], { icon: dcIcon, keyboard: false })
+        .bindTooltip(`<strong>${hub.name}</strong><br/>${hub.power} · ${hub.price}`, {
+          direction: 'top',
+          offset: [0, -12]
+        })
+        .addTo(dc);
+    });
+  }, [showPublicDcOverlay]);
+
+  const btn =
+    'w-8 h-8 bg-white flex items-center justify-center text-slate-700 hover:bg-slate-50 active:bg-slate-100';
+
   return (
-    <div className="relative w-full h-56 bg-slate-900 rounded-2xl overflow-hidden border border-slate-700 shadow-inner select-none">
-      {/* Stylized Czech Republic Topographic Grid & Rural Zones */}
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full opacity-90">
-        <defs>
-          <pattern id="czGrid" width="10" height="10" patternUnits="userSpaceOnUse">
-            <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#1e293b" strokeWidth="0.4" />
-          </pattern>
-        </defs>
-        <rect width="100" height="100" fill="#0f172a" />
-        <rect width="100" height="100" fill="url(#czGrid)" />
+    <div className="relative w-full h-[300px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm select-none">
+      <div ref={containerRef} className="absolute inset-0" />
 
-        {/* Czech Republic Approximate Border Polygon */}
-        <polygon
-          points="8,44 18,26 35,18 56,22 72,30 92,38 94,56 76,76 62,84 42,80 22,82 12,64"
-          fill="#1e293b"
-          stroke="#334155"
-          strokeWidth="0.8"
-        />
-
-        {/* Rural "Charging Desert" Highlight Zones (SO1) */}
-        <circle cx="26" cy="74" r="9" fill="#10b981" fillOpacity="0.12" stroke="#10b981" strokeDasharray="1.5,1.5" strokeWidth="0.4" />
-        <circle cx="49" cy="66" r="8" fill="#10b981" fillOpacity="0.12" stroke="#10b981" strokeDasharray="1.5,1.5" strokeWidth="0.4" />
-        <circle cx="78" cy="38" r="8" fill="#10b981" fillOpacity="0.12" stroke="#10b981" strokeDasharray="1.5,1.5" strokeWidth="0.4" />
-
-        {/* D1 & D5 Primary Highway Corridors */}
-        <polyline
-          points="22,50 38,40 48,54 65,67 76,55"
-          fill="none"
-          stroke="#475569"
-          strokeWidth="1.2"
-          strokeDasharray="2,1"
-        />
-
-        {/* Geographic Labels */}
-        <text x="36" y="36" fill="#94a3b8" fontSize="3.2" fontWeight="700">PRAHA</text>
-        <text x="63" y="72" fill="#94a3b8" fontSize="3" fontWeight="600">BRNO (D1)</text>
-        <text x="16" y="86" fill="#34d399" fontSize="2.7" fontWeight="600">Šumava (Rural)</text>
-        <text x="43" y="77" fill="#34d399" fontSize="2.7" fontWeight="600">Vysočina</text>
-        <text x="72" y="29" fill="#34d399" fontSize="2.7" fontWeight="600">Jeseníky</text>
-      </svg>
-
-      {/* Optional Commercial Public DC Highway Hubs Overlay (SO1 / RQ1 Comparison) */}
-      {showPublicDcOverlay &&
-        PUBLIC_DC_HUBS.map((dc) => (
-          <div
-            key={dc.id}
-            style={{ left: `${dc.mapX}%`, top: `${dc.mapY}%` }}
-            title={`${dc.name} (${dc.price})`}
-            className="absolute -translate-x-1/2 -translate-y-1/2 z-10 pointer-events-none"
-          >
-            <div className="w-4 h-4 rounded-full bg-amber-500/90 border border-white flex items-center justify-center shadow">
-              <span className="text-[7px] font-bold text-slate-950">DC</span>
-            </div>
-          </div>
-        ))}
-
-      {/* P2P Private Charging Station Markers */}
-      {stations.map((station) => {
-        const isSelected = selectedStation?.id === station.id;
-        return (
-          <button
-            key={station.id}
-            onClick={() => onSelectStation(station)}
-            style={{ left: `${station.mapX}%`, top: `${station.mapY}%` }}
-            className={`absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-200 ${
-              isSelected ? 'z-30 scale-125' : 'z-20 hover:scale-110'
-            }`}
-          >
-            {/* 250m Privacy Circle when selected */}
-            {isSelected && (
-              <span className="absolute -inset-3 rounded-full bg-emerald-400/25 border border-emerald-400/60 animate-ping" />
-            )}
-            <div
-              className={`px-1.5 py-0.5 rounded-full flex items-center gap-0.5 shadow-lg border text-[10px] font-bold ${
-                !station.availableNow
-                  ? 'bg-slate-700 text-slate-300 border-slate-500'
-                  : isSelected
-                  ? 'bg-emerald-500 text-slate-950 border-white ring-2 ring-emerald-400'
-                  : 'bg-emerald-600 text-white border-emerald-300'
-              }`}
-            >
-              <Zap className="w-2.5 h-2.5 fill-current" />
-              <span>{station.pricePerKwh.toFixed(1)}</span>
-            </div>
-          </button>
-        );
-      })}
-
-      {/* Map Header Controls */}
-      <div className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none">
-        <div className="bg-slate-900/90 backdrop-blur px-2 py-1 rounded-lg border border-slate-700 flex items-center gap-1.5">
-          <Navigation className="w-3 h-3 text-emerald-400" />
-          <span className="text-[10px] font-semibold text-slate-200">
-            CZ Geospatial Grid ({stations.length} P2P Nodes)
+      {/* Top overlays */}
+      <div className="absolute top-2.5 left-2.5 right-2.5 z-[1000] flex items-start justify-between pointer-events-none">
+        <div className="pointer-events-auto bg-white/95 backdrop-blur px-2.5 py-1.5 rounded-full shadow-md flex items-center gap-1.5 text-[11px] font-semibold text-slate-800">
+          <span className="w-4 h-4 rounded-full bg-emerald-700 text-white flex items-center justify-center">
+            <Zap className="w-2.5 h-2.5 fill-current" />
           </span>
+          {stations.length} shared chargers
         </div>
 
         <button
           onClick={() => setShowPublicDcOverlay(!showPublicDcOverlay)}
-          className={`pointer-events-auto px-2 py-1 rounded-lg text-[10px] font-semibold border transition ${
-            showPublicDcOverlay
-              ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-              : 'bg-slate-900/90 border-slate-700 text-slate-300 hover:border-slate-500'
+          className={`pointer-events-auto px-2.5 py-1.5 rounded-full text-[11px] font-semibold shadow-md flex items-center gap-1.5 transition ${
+            showPublicDcOverlay ? 'bg-amber-500 text-slate-900' : 'bg-white/95 text-slate-700'
           }`}
         >
-          {showPublicDcOverlay ? 'Hide Highway DC' : 'Compare Highway DC'}
+          <span
+            className={`w-2 h-2 rounded-full ${showPublicDcOverlay ? 'bg-slate-900' : 'bg-amber-500'}`}
+          />
+          {showPublicDcOverlay ? 'Hide public DC' : 'Compare public DC'}
         </button>
       </div>
 
-      {/* Bottom Legend & NFR-03 Privacy Indicator */}
-      <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[9px] bg-slate-950/85 backdrop-blur px-2.5 py-1 rounded-lg border border-slate-800 text-slate-300">
-        <div className="flex items-center gap-2">
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> P2P (5.8–7.2 CZK)
-          </span>
-          {showPublicDcOverlay && (
-            <span className="flex items-center gap-1 text-amber-300">
-              <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> Hwy DC (~13 CZK)
-            </span>
-          )}
-        </div>
-        <span className="flex items-center gap-1 text-emerald-400 font-medium">
-          <Shield className="w-2.5 h-2.5" /> 250m Privacy Active
+      {/* Zoom / fit controls */}
+      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-[1000] flex flex-col rounded-xl overflow-hidden shadow-md divide-y divide-slate-200">
+        <button aria-label="Zoom in" className={btn} onClick={() => mapRef.current?.zoomIn()}>
+          <Plus className="w-4 h-4" />
+        </button>
+        <button aria-label="Zoom out" className={btn} onClick={() => mapRef.current?.zoomOut()}>
+          <Minus className="w-4 h-4" />
+        </button>
+        <button aria-label="Show all of Czechia" className={btn} onClick={() => fitCountry()}>
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Legend */}
+      <div className="absolute bottom-2 left-2 z-[1000] bg-white/95 backdrop-blur rounded-lg shadow px-2 py-1 flex items-center gap-2.5 text-[9.5px] font-medium text-slate-600">
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-emerald-700" /> Home charger
         </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2.5 h-2.5 rounded-full border border-dashed border-emerald-600 bg-emerald-500/15" /> Charging gap
+        </span>
+        {showPublicDcOverlay && (
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-amber-500" /> Public DC
+          </span>
+        )}
+        {route && (
+          <span className="flex items-center gap-1">
+            <span className="w-3 h-[3px] rounded bg-sky-600" /> Route
+          </span>
+        )}
       </div>
     </div>
   );

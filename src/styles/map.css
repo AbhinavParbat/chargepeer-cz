@@ -1,0 +1,151 @@
+/* ---------- Leaflet base tweaks ---------- */
+.leaflet-container {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #eef1f4;
+  isolation: isolate;
+}
+.leaflet-control-attribution {
+  font-size: 8px !important;
+  line-height: 1.4 !important;
+  padding: 1px 5px !important;
+  background: rgba(255, 255, 255, 0.75) !important;
+  border-top-left-radius: 6px;
+}
+.leaflet-control-attribution a {
+  color: #475569 !important;
+}
+
+/* Soften the default OSM palette so pins and UI stand out (app-like look) */
+.leaflet-tile-pane {
+  filter: saturate(0.7) brightness(1.04) contrast(0.95);
+}
+
+/* divIcon wrapper is a zero-size anchor at the exact lat/lng */
+.cp-icon-wrap {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* ---------- Price pin (P2P station) ---------- */
+.cp-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, calc(-100% - 7px));
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 9px 5px 7px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f172a;
+  font: 700 11.5px/1 'Inter', sans-serif;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(15, 23, 42, 0.06);
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.cp-pin::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 7px solid #ffffff;
+}
+.cp-pin svg {
+  width: 12px;
+  height: 12px;
+  color: #059669;
+}
+.cp-pin:hover {
+  transform: translate(-50%, calc(-100% - 7px)) scale(1.06);
+}
+.cp-pin.is-selected {
+  background: #047857;
+  color: #ffffff;
+  transform: translate(-50%, calc(-100% - 7px)) scale(1.12);
+  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.45), 0 0 0 2px #ffffff;
+}
+.cp-pin.is-selected::after {
+  border-top-color: #047857;
+}
+.cp-pin.is-selected svg {
+  color: #ffffff;
+}
+.cp-pin.is-offline {
+  background: #f1f5f9;
+  color: #64748b;
+}
+.cp-pin.is-offline::after {
+  border-top-color: #f1f5f9;
+}
+.cp-pin.is-offline svg {
+  color: #94a3b8;
+}
+
+/* ---------- Public DC hub ---------- */
+.cp-dc {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #f59e0b;
+  color: #0f172a;
+  border: 2px solid #ffffff;
+  font: 800 8.5px/1 'Inter', sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.3);
+}
+
+/* ---------- Exact driveway pin (after booking / host picker) ---------- */
+.cp-home {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #059669;
+  color: #ffffff;
+  border: 3px solid #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.25), 0 4px 10px rgba(15, 23, 42, 0.3);
+}
+.cp-home svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---------- Charging-gap zone label ---------- */
+.cp-zone-label {
+  position: absolute;
+  transform: translate(-50%, 4px);
+  white-space: nowrap;
+  font: 700 9.5px/1 'Inter', sans-serif;
+  color: #047857;
+  letter-spacing: 0.01em;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
+  pointer-events: none;
+}
+
+/* ---------- Trip route endpoint label ---------- */
+.cp-route-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #ffffff;
+  font: 700 9.5px/1 'Inter', sans-serif;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.3);
+  pointer-events: none;
+}

@@ -1,27 +1,28 @@
 import React, { useState } from 'react';
 import { Database, Calculator, CheckCircle2, Layers, Terminal } from 'lucide-react';
 import { PLATFORM_COMMISSION, DEFAULT_GRID_COST } from '../data/mockData';
+import { computeSession, VEHICLE_BATTERY_KWH } from '../lib/calc';
 
 export default function DefenseInspector({
   activeScreen,
   setActiveScreen,
   selectedStation,
   selectedSlots,
+  currentSoc,
   bookings,
   stations
 }) {
   const [activeTab, setActiveTab] = useState('requirements');
 
-  const durationHours = selectedSlots.length || 1;
-  const energyDelivered = selectedStation ? selectedStation.powerKw * durationHours : 0;
-  const sessionCost = selectedStation
-    ? energyDelivered * selectedStation.pricePerKwh + durationHours * selectedStation.hourlyFee
-    : 0;
-  const netHostRevenue =
-    (1 - PLATFORM_COMMISSION) * sessionCost - energyDelivered * DEFAULT_GRID_COST;
+  const s = computeSession(selectedStation, selectedSlots, currentSoc);
+  const durationHours = s.hours;
+  const energyDelivered = s.energyKwh;
+  const sessionCost = s.totalCost;
+  const netHostRevenue = s.hostNet;
+  const keep = (1 - PLATFORM_COMMISSION).toFixed(2);
 
   return (
-    <div className="flex-1 bg-slate-900 border border-slate-800 rounded-3xl p-5 text-slate-200 flex flex-col max-h-[820px] overflow-hidden shadow-2xl">
+    <div className="flex-1 bg-slate-900 border border-slate-800 rounded-3xl p-5 text-slate-200 flex flex-col max-h-[calc(100vh-120px)] overflow-hidden shadow-2xl">
       <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
         <div>
           <span className="text-[11px] uppercase tracking-wider font-bold text-emerald-400">
@@ -64,12 +65,12 @@ export default function DefenseInspector({
         </div>
         <div className="grid grid-cols-3 gap-2">
           {[
-            { id: 1, name: 'Screen 1: Map & Search' },
-            { id: 2, name: 'Screen 2: Station & Trust' },
-            { id: 3, name: 'Screen 3: Slot Booking' },
-            { id: 4, name: 'Screen 4: Gate Unlock & Rate' },
-            { id: 5, name: 'Screen 5: Host Add Station' },
-            { id: 6, name: 'Screen 6: Role & Earnings' }
+            { id: 1, name: 'Screen 1: Map & Search', fr: 'FR-02, FR-03' },
+            { id: 2, name: 'Screen 2: Station & Trust', fr: 'FR-06, NFR-03' },
+            { id: 3, name: 'Screen 3: Slot Booking', fr: 'FR-05, FR-07' },
+            { id: 4, name: 'Screen 4: Gate Unlock & Rate', fr: 'FR-06, NFR-03' },
+            { id: 5, name: 'Screen 5: Host Add Station', fr: 'FR-04' },
+            { id: 6, name: 'Screen 6: Role & Earnings', fr: 'FR-01, FR-08' }
           ].map((scr) => (
             <button
               key={scr.id}
@@ -81,6 +82,7 @@ export default function DefenseInspector({
               }`}
             >
               {scr.name}
+              <span className="block text-[10px] font-normal text-slate-500 mt-0.5">{scr.fr}</span>
             </button>
           ))}
         </div>
@@ -98,7 +100,7 @@ export default function DefenseInspector({
                 <li className="flex items-start gap-2">
                   <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-300 rounded font-bold">1</span>
                   <div>
-                    <strong className="text-white">Searching by Location (FR-02, FR-03):</strong> Interactive Czech geospatial map highlighting rural charging deserts (Šumava, Vysočina, Jeseníky) with connector & power filters.
+                    <strong className="text-white">Searching by Location (FR-02, FR-03):</strong> Real OpenStreetMap-based map of Czechia (Leaflet) highlighting rural charging deserts (Šumava, Vysočina, Jeseníky, Bohemian Switzerland, Kokořínsko) with power/availability filters and a Prague → Berlin road-trip range check that recommends a P2P host inside the charging gap.
                   </div>
                 </li>
                 <li className="flex items-start gap-2">
@@ -158,10 +160,12 @@ export default function DefenseInspector({
               </p>
 
               <div className="space-y-2 font-mono bg-slate-900 p-3 rounded-xl border border-slate-800">
-                <div className="text-slate-400">// 1. Energy Delivered (E_delivered)</div>
+                <div className="text-slate-400">// 1. Energy Delivered (capped by free battery capacity)</div>
                 <div className="text-white">
-                  E_delivered = {selectedStation?.powerKw} kW × {durationHours} h ={' '}
+                  E_delivered = min(P × t, (1 − SoC) × B) = min({selectedStation?.powerKw} × {durationHours},{' '}
+                  {(1 - currentSoc / 100).toFixed(2)} × {VEHICLE_BATTERY_KWH}) ={' '}
                   <span className="text-emerald-400 font-bold">{energyDelivered.toFixed(1)} kWh</span>
+                  {s.batteryCapped && <span className="text-sky-300"> (battery-limited)</span>}
                 </div>
 
                 <div className="text-slate-400 pt-2">// 2. Total Guest Session Cost (C_session)</div>
@@ -170,10 +174,29 @@ export default function DefenseInspector({
                   <span className="text-emerald-400 font-bold">{sessionCost.toFixed(2)} CZK</span>
                 </div>
 
-                <div className="text-slate-400 pt-2">// 3. Net Host Revenue (R_host) with α=12% & C_grid=4.20 CZK</div>
+                <div className="text-slate-400 pt-2">
+                  // 3. Net Host Revenue (R_host) with α={Math.round(PLATFORM_COMMISSION * 100)}% & C_grid={DEFAULT_GRID_COST.toFixed(2)} CZK
+                </div>
                 <div className="text-white">
-                  R_host = (0.88 × {sessionCost.toFixed(2)}) - ({energyDelivered.toFixed(1)} × 4.20) ={' '}
-                  <span className="text-amber-300 font-bold">+{netHostRevenue.toFixed(2)} CZK net profit</span>
+                  R_host = ({keep} × {sessionCost.toFixed(2)}) − ({energyDelivered.toFixed(1)} × {DEFAULT_GRID_COST.toFixed(2)}) ={' '}
+                  <span className="text-amber-300 font-bold">
+                    {netHostRevenue >= 0 ? '+' : ''}
+                    {netHostRevenue.toFixed(2)} CZK net profit
+                  </span>
+                </div>
+
+                <div className="text-slate-400 pt-2">// 5. Road-trip leg energy (Prague → Berlin detour, Screen 1)</div>
+                <div className="text-white">
+                  E_leg = d × e_base × f_terrain × f_season, e_base = 1/5.6 ≈ 0.179 kWh/km, f_terrain ∈ [1.05, 1.3], f_season ∈ {'{'}1.0, 1.25{'}'}
+                </div>
+                <div className="text-white">
+                  E_required_at_host = max(0, reserve × B + Σ E_remaining − SoC_arrival × B); t_host = ⌈E_required / P⌉
+                </div>
+
+                <div className="text-slate-400 pt-2">// 4. Battery state after charging</div>
+                <div className="text-white">
+                  SoC_departure = {currentSoc}% + {energyDelivered.toFixed(1)} / {VEHICLE_BATTERY_KWH} ={' '}
+                  <span className="text-emerald-400 font-bold">{s.socDeparture}%</span> (+{s.rangeKm} km)
                 </div>
               </div>
             </div>
@@ -195,6 +218,8 @@ export default function DefenseInspector({
                   selected_station_record: {
                     station_id: selectedStation?.id,
                     title: selectedStation?.title,
+                    public_location: [selectedStation?.lat, selectedStation?.lng],
+                    exact_location_hidden: [selectedStation?.exactLat, selectedStation?.exactLng],
                     power_kw: selectedStation?.powerKw,
                     tariff_czk_kwh: selectedStation?.pricePerKwh,
                     booked_slots: selectedStation?.bookedSlots

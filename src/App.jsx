@@ -1,31 +1,164 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   MapPin,
   Zap,
   ShieldCheck,
   Star,
-  Calendar,
-  Clock,
+  CalendarCheck,
   Lock,
   Unlock,
   PlusCircle,
-  UserCheck,
+  User,
   Search,
   BatteryCharging,
   CheckCircle2,
   Camera,
-  SlidersHorizontal,
-  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Navigation,
-  Sparkles
+  Sparkles,
+  Signal,
+  Wifi,
+  BatteryFull,
+  Compass,
+  Plug,
+  KeyRound,
+  Route,
+  BadgeCheck,
+  Clock,
+  Info,
+  X,
+  ArrowLeftRight,
+  Car,
+  Wallet,
+  Gauge
 } from 'lucide-react';
 import {
   INITIAL_STATIONS,
   PLATFORM_COMMISSION,
-  DEFAULT_GRID_COST
+  DEFAULT_GRID_COST,
+  DEMO_USER,
+  HOST_BASELINE_STATS,
+  NEW_LISTING_DEFAULT_LOCATION,
+  TRIP_SCENARIO
 } from './data/mockData';
+import {
+  computeSession,
+  estimateHostEarnings,
+  nextSlotSelection,
+  defaultSlots,
+  formatSlotRange,
+  formatCzk,
+  VEHICLE_BATTERY_KWH
+} from './lib/calc';
 import InteractiveMap from './components/InteractiveMap';
+import MiniMap from './components/MiniMap';
+import TripPlanner from './components/TripPlanner';
 import DefenseInspector from './components/DefenseInspector';
+
+const PHONE_W = 410;
+const PHONE_H = 864;
+
+const todayLabel = () =>
+  new Date().toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+const monthYearLabel = () =>
+  new Date().toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+const initials = (name) =>
+  name
+    .replace(/^(Ing\.|Bc\.|Mgr\.)\s*/i, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0])
+    .join('')
+    .toUpperCase();
+
+/* ------------------------------------------------------------------ */
+/* Small UI primitives                                                 */
+/* ------------------------------------------------------------------ */
+
+const Card = ({ className = '', children, ...rest }) => (
+  <div
+    className={`bg-white rounded-2xl border border-slate-200/80 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}
+    {...rest}
+  >
+    {children}
+  </div>
+);
+
+const Pill = ({ tone = 'slate', icon: Icon, children }) => {
+  const tones = {
+    slate: 'bg-slate-100 text-slate-600',
+    green: 'bg-emerald-50 text-emerald-700',
+    amber: 'bg-amber-50 text-amber-700',
+    blue: 'bg-sky-50 text-sky-700'
+  };
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-semibold ${tones[tone]}`}
+    >
+      {Icon && <Icon className="w-3 h-3" />}
+      {children}
+    </span>
+  );
+};
+
+const Stat = ({ label, value, sub, accent = 'text-slate-900' }) => (
+  <div className="bg-slate-50 rounded-xl px-2.5 py-2.5 text-center">
+    <div className="text-[10.5px] text-slate-500 font-medium">{label}</div>
+    <div className={`text-[15px] font-bold leading-tight mt-0.5 ${accent}`}>{value}</div>
+    {sub && <div className="text-[10px] text-slate-500 mt-0.5">{sub}</div>}
+  </div>
+);
+
+const SectionTitle = ({ children, right }) => (
+  <div className="flex items-center justify-between px-0.5 mb-2">
+    <h3 className="text-[13px] font-semibold text-slate-900">{children}</h3>
+    {right}
+  </div>
+);
+
+const PrimaryButton = ({ className = '', disabled, children, ...rest }) => (
+  <button
+    disabled={disabled}
+    className={`h-12 rounded-2xl font-semibold text-[14px] transition flex items-center justify-center gap-2 ${
+      disabled
+        ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+        : 'bg-emerald-700 text-white hover:bg-emerald-800 active:scale-[0.99] shadow-[0_6px_16px_-6px_rgba(5,150,105,0.6)]'
+    } ${className}`}
+    {...rest}
+  >
+    {children}
+  </button>
+);
+
+const Field = ({ label, hint, children }) => (
+  <label className="block">
+    <span className="text-[11.5px] font-medium text-slate-600">{label}</span>
+    <div className="mt-1">{children}</div>
+    {hint && <span className="text-[10.5px] text-slate-500 mt-1 block">{hint}</span>}
+  </label>
+);
+
+const inputCls =
+  'w-full h-10 bg-white border border-slate-200 rounded-xl px-3 text-[13px] text-slate-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15';
+
+/* ------------------------------------------------------------------ */
+/* Scale the phone so it always fits the browser window                */
+/* ------------------------------------------------------------------ */
+function useFitScale(reserved) {
+  const calc = () => Math.min(1, (window.innerHeight - reserved) / PHONE_H);
+  const [scale, setScale] = useState(calc);
+  useEffect(() => {
+    const onResize = () => setScale(calc());
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [reserved]);
+  return scale;
+}
+
+/* ================================================================== */
 
 export default function App() {
   const [stations, setStations] = useState(INITIAL_STATIONS);
@@ -40,12 +173,16 @@ export default function App() {
   const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [showPublicDcOverlay, setShowPublicDcOverlay] = useState(false);
 
-  // Booking & EV Battery Range Calculator states (Screen 3)
-  const [selectedSlots, setSelectedSlots] = useState(['14:00', '15:00', '16:00']);
-  const [currentSoc, setCurrentSoc] = useState(24); // 24% battery (range anxiety threshold)
-  const [vehicleBatteryKwh] = useState(60); // 60 kWh standard BEV
+  // Road-trip range check (Screen 1, SO6)
+  const [tripMode, setTripMode] = useState(false);
+  const [tripStartSoc, setTripStartSoc] = useState(80);
+  const [tripSeason, setTripSeason] = useState('winter');
 
-  // Active Reservations & Review Modal (Screen 4)
+  // Booking & EV Battery Range Calculator states (Screen 3)
+  const [selectedSlots, setSelectedSlots] = useState(() => defaultSlots(INITIAL_STATIONS[0]));
+  const [currentSoc, setCurrentSoc] = useState(24); // 24% battery (range anxiety threshold)
+
+  // Reservations & Review (Screen 4)
   const [bookings, setBookings] = useState([
     {
       bookingId: 'BK-2026-801',
@@ -53,18 +190,23 @@ export default function App() {
       stationTitle: 'Šumava Mountain Chalet Wallbox',
       municipality: 'Kvilda (Šumava Rural Zone)',
       exactAddress: 'Kvilda 48, 384 93 Kvilda (Driveway Carport)',
+      exactLat: 49.0195,
+      exactLng: 13.579,
       gatePin: '#4829*',
       slots: ['14:00', '15:00', '16:00'],
+      date: todayLabel(),
       energyKwh: 33.0,
       totalCostCzk: 244.5,
       status: 'CONFIRMED',
       rated: false
     }
   ]);
+  const [activeBookingId, setActiveBookingId] = useState('BK-2026-801');
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewTag, setReviewTag] = useState('Saved Rural Trip');
   const [reviewComment, setReviewComment] = useState('');
   const [toastMessage, setToastMessage] = useState('');
+  const toastTimer = useRef(null);
 
   // Host New Station Form (Screen 5)
   const [newStationForm, setNewStationForm] = useState({
@@ -75,8 +217,13 @@ export default function App() {
     pricePerKwh: 6.4,
     hourlyFee: 10,
     exactAddress: 'Parkán 105, 381 01 Český Krumlov',
-    gatePin: '#5590*'
+    gatePin: '#5590*',
+    lat: NEW_LISTING_DEFAULT_LOCATION.lat,
+    lng: NEW_LISTING_DEFAULT_LOCATION.lng
   });
+
+  const scrollRef = useRef(null);
+  const scale = useFitScale(screenshotMode ? 48 : 120);
 
   const selectedStation = useMemo(
     () => stations.find((s) => s.id === selectedStationId) || stations[0],
@@ -84,38 +231,60 @@ export default function App() {
   );
 
   const filteredStations = useMemo(() => {
-    return stations.filter((s) => {
-      const matchesSearch =
-        s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.municipality.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesPower = s.powerKw >= minPowerFilter;
-      const matchesAvail = !onlyAvailable || s.availableNow;
-      return matchesSearch && matchesPower && matchesAvail;
-    });
+    const q = searchQuery.trim().toLowerCase();
+    return stations
+      .filter((s) => {
+        const matchesSearch =
+          !q || s.title.toLowerCase().includes(q) || s.municipality.toLowerCase().includes(q);
+        const matchesPower = s.powerKw >= minPowerFilter;
+        const matchesAvail = !onlyAvailable || s.availableNow;
+        return matchesSearch && matchesPower && matchesAvail;
+      })
+      .sort((a, b) => a.distanceKm - b.distanceKm);
   }, [stations, searchQuery, minPowerFilter, onlyAvailable]);
 
+  const session = computeSession(selectedStation, selectedSlots, currentSoc);
+  const activeBooking = bookings.find((b) => b.bookingId === activeBookingId) || bookings[0];
+
+  // Reset scroll position when switching screens
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [activeScreen]);
+
+  // Esc leaves screenshot mode
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && setScreenshotMode(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const triggerToast = (msg) => {
+    clearTimeout(toastTimer.current);
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(''), 3200);
+    toastTimer.current = setTimeout(() => setToastMessage(''), 3200);
   };
 
-  // Booking Calculations (Chapter 3 Formulas)
-  const durationHours = Math.max(selectedSlots.length, 1);
-  const energyDeliveredKwh = selectedStation.powerKw * durationHours;
-  const socAddedPercent = Math.min(
-    100 - currentSoc,
-    Math.round((energyDeliveredKwh / vehicleBatteryKwh) * 100)
-  );
-  const rangeKmAdded = Math.round(energyDeliveredKwh * 5.6); // ~17.8 kWh/100km
-  const totalSessionCost =
-    energyDeliveredKwh * selectedStation.pricePerKwh +
-    durationHours * selectedStation.hourlyFee;
+  const selectStation = (id) => {
+    if (id === selectedStationId) return;
+    const st = stations.find((s) => s.id === id);
+    setSelectedStationId(id);
+    if (st) setSelectedSlots(defaultSlots(st));
+  };
+
+  // Trip planner -> book the P2P host inside the charging gap for the required hours
+  const handleBookTripHost = (hours, arrivalSoc) => {
+    const host = stations.find((s) => s.id === TRIP_SCENARIO.hostStationId);
+    if (!host) return;
+    setSelectedStationId(host.id);
+    setSelectedSlots(defaultSlots(host, '10:00', hours));
+    const soc = Math.min(80, Math.max(5, arrivalSoc));
+    setCurrentSoc(soc);
+    setActiveScreen(3);
+    triggerToast(`${hours} h pre-selected — arrival battery set to ${soc}%.`);
+  };
 
   const toggleTimeSlot = (slot) => {
-    if (selectedStation.bookedSlots.includes(slot)) return;
-    setSelectedSlots((prev) =>
-      prev.includes(slot) ? prev.filter((t) => t !== slot) : [...prev, slot].sort()
-    );
+    setSelectedSlots((prev) => nextSlotSelection(selectedStation, prev, slot));
   };
 
   const handleConfirmBooking = () => {
@@ -129,10 +298,13 @@ export default function App() {
       stationTitle: selectedStation.title,
       municipality: selectedStation.municipality,
       exactAddress: selectedStation.exactAddress,
+      exactLat: selectedStation.exactLat,
+      exactLng: selectedStation.exactLng,
       gatePin: selectedStation.gatePin,
       slots: [...selectedSlots],
-      energyKwh: energyDeliveredKwh,
-      totalCostCzk: totalSessionCost,
+      date: todayLabel(),
+      energyKwh: Number(session.energyKwh.toFixed(1)),
+      totalCostCzk: session.totalCost,
       status: 'CONFIRMED',
       rated: false
     };
@@ -146,8 +318,10 @@ export default function App() {
       )
     );
     setBookings((prev) => [newBooking, ...prev]);
+    setActiveBookingId(newBooking.bookingId);
+    setSelectedSlots([]);
     setActiveScreen(4);
-    triggerToast('Reservation confirmed! Exact driveway address & Gate PIN unlocked.');
+    triggerToast('Booking confirmed — exact address & gate PIN unlocked.');
   };
 
   const handleSubmitReview = (bookingId) => {
@@ -159,41 +333,42 @@ export default function App() {
         if (st.id !== targetBooking.stationId) return st;
         const newRev = {
           id: `REV-${Date.now()}`,
-          guest: 'Abhinav P. (Verified EV Guest)',
+          guest: 'Abhinav P.',
           rating: reviewRating,
-          date: 'Oct 2026',
+          date: monthYearLabel(),
           tag: reviewTag,
           comment: reviewComment || 'Smooth charging session, accurate power output.'
         };
-        return {
-          ...st,
-          reviewCount: st.reviewCount + 1,
-          reviews: [newRev, ...st.reviews]
-        };
+        const newCount = st.reviewCount + 1;
+        const newAvg = Math.round(((st.rating * st.reviewCount + reviewRating) / newCount) * 100) / 100;
+        return { ...st, rating: newAvg, reviewCount: newCount, reviews: [newRev, ...st.reviews] };
       })
     );
 
     setBookings((prev) =>
       prev.map((b) =>
-        b.bookingId === bookingId ? { ...b, status: 'COMPLETED', rated: true } : b
+        b.bookingId === bookingId
+          ? { ...b, status: 'COMPLETED', rated: true, givenRating: reviewRating }
+          : b
       )
     );
     setReviewComment('');
-    triggerToast('Bilateral 5-star review recorded & Host Trust Score updated!');
+    triggerToast('Thanks! Your review updated the host’s trust score.');
   };
 
   const handleCreateHostListing = (e) => {
     e.preventDefault();
+    const nextNum = stations.length + 1;
     const createdStation = {
-      id: `P2P-CZ-0${stations.length + 1}`,
+      id: `P2P-CZ-${String(nextNum).padStart(2, '0')}`,
       title: newStationForm.title,
       municipality: newStationForm.municipality,
       zoneType: 'New Host P2P Node',
-      hostName: 'Abhinav Kumar Parbat',
+      hostName: DEMO_USER.name,
       hostVerified: true,
       hardwareVerified: true,
       rating: 5.0,
-      reviewCount: 1,
+      reviewCount: 0,
       connector: newStationForm.connector,
       powerKw: Number(newStationForm.powerKw),
       pricePerKwh: Number(newStationForm.pricePerKwh),
@@ -202,8 +377,11 @@ export default function App() {
       instantBook: true,
       nearestPublicDcKm: 28.0,
       distanceKm: 1.5,
-      mapX: 35,
-      mapY: 78,
+      // public point is offset ~150 m from the real driveway (NFR-03)
+      lat: newStationForm.lat + 0.0011,
+      lng: newStationForm.lng + 0.0013,
+      exactLat: newStationForm.lat,
+      exactLng: newStationForm.lng,
       publicAreaLabel: `${newStationForm.municipality} (250m Privacy Circle)`,
       exactAddress: newStationForm.exactAddress,
       gatePin: newStationForm.gatePin,
@@ -215,18 +393,1117 @@ export default function App() {
 
     setStations((prev) => [createdStation, ...prev]);
     setSelectedStationId(createdStation.id);
+    setSelectedSlots(defaultSlots(createdStation));
     setActiveScreen(1);
-    triggerToast('New residential charger published to the Czech P2P map!');
+    triggerToast('Your charger is live on the ChargePeer map!');
   };
 
-  const activeBooking = bookings[0];
+  const switchRole = () => {
+    const nextRole = userRole === 'GUEST' ? 'HOST' : 'GUEST';
+    setUserRole(nextRole);
+    setActiveScreen(nextRole === 'HOST' ? 5 : 1);
+  };
+
+  /* ---------------- App bar per screen ---------------- */
+  const screenMeta = {
+    1: { title: 'Explore', subtitle: 'Shared home chargers across Czechia', tab: true },
+    2: { title: 'Charger details', back: 1 },
+    3: { title: 'Book a time slot', back: 2 },
+    4: { title: 'My bookings', subtitle: 'Access details & reviews', tab: true },
+    5: { title: 'Host a charger', subtitle: 'Share your wallbox, earn per kWh', tab: true },
+    6: { title: 'Profile', subtitle: 'Account, roles & earnings', tab: true }
+  }[activeScreen];
+
+  const hostEstimate = estimateHostEarnings(newStationForm, 4);
+  const myStations = stations.filter((s) => s.hostName.startsWith(DEMO_USER.name));
+  const driverKwh = bookings.reduce((sum, b) => sum + b.energyKwh, 0);
+  const driverSpend = bookings.reduce((sum, b) => sum + b.totalCostCzk, 0);
+
+  /* ================================================================ */
+  /* Phone                                                            */
+  /* ================================================================ */
+  const phone = (
+    <div
+      className="relative bg-[#111113] rounded-[60px] p-[11px] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6),inset_0_0_0_2px_#3a3a3c]"
+      style={{ width: PHONE_W, height: PHONE_H }}
+    >
+      <div className="relative w-full h-full bg-slate-50 rounded-[49px] overflow-hidden flex flex-col text-slate-900">
+        {/* iOS status bar */}
+        <div className="relative h-[50px] shrink-0 bg-white flex items-center justify-between px-8 pt-1 text-[15px] font-semibold">
+          <span className="tracking-tight">9:41</span>
+          <div className="absolute left-1/2 -translate-x-1/2 top-[11px] w-[120px] h-[34px] bg-black rounded-full" />
+          <div className="flex items-center gap-1.5">
+            <Signal className="w-4 h-4" strokeWidth={2.5} />
+            <Wifi className="w-4 h-4" strokeWidth={2.5} />
+            <BatteryFull className="w-6 h-6" strokeWidth={1.8} />
+          </div>
+        </div>
+
+        {/* App bar */}
+        <div className="shrink-0 bg-white px-4 pb-3 pt-1 border-b border-slate-200/70">
+          {screenMeta.back ? (
+            <div className="relative flex items-center h-9">
+              <button
+                onClick={() => setActiveScreen(screenMeta.back)}
+                className="-ml-2 flex items-center text-emerald-700 text-[15px] font-medium"
+              >
+                <ChevronLeft className="w-6 h-6" />
+                Back
+              </button>
+              <div className="absolute left-1/2 -translate-x-1/2 text-[15px] font-semibold">
+                {screenMeta.title}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-end justify-between">
+              <div>
+                <h1 className="text-[26px] font-bold tracking-tight leading-tight">{screenMeta.title}</h1>
+                <p className="text-[12.5px] text-slate-500">{screenMeta.subtitle}</p>
+              </div>
+              <button
+                onClick={switchRole}
+                className="mb-1 h-8 px-3 rounded-full bg-slate-100 text-slate-700 text-[11.5px] font-semibold flex items-center gap-1.5 hover:bg-slate-200"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+                {userRole === 'GUEST' ? 'Host mode' : 'Driver mode'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Toast */}
+        {toastMessage && (
+          <div className="absolute top-[108px] left-4 right-4 z-[2000] bg-slate-900 text-white px-3.5 py-3 rounded-2xl text-[12.5px] font-medium flex items-center gap-2.5 shadow-xl">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+
+        {/* Screen body */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto overscroll-contain">
+          {/* ============ SCREEN 1: MAP & DISCOVERY ============ */}
+          {activeScreen === 1 && (
+            <div className="px-4 pt-3 pb-6 space-y-3">
+              <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-2xl px-3.5 h-11 shadow-sm focus-within:border-emerald-500">
+                <Search className="w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search town or region (Kvilda, Telč…)"
+                  className="flex-1 bg-transparent text-[13.5px] placeholder-slate-500 focus:outline-none"
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="text-slate-500">
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Filter chips (FR-03) */}
+              <div className="flex items-center gap-2 overflow-x-auto -mx-4 px-4 pb-0.5">
+                {[
+                  {
+                    label: '22 kW',
+                    icon: Zap,
+                    active: minPowerFilter === 22,
+                    onClick: () => setMinPowerFilter(minPowerFilter === 22 ? 0 : 22)
+                  },
+                  {
+                    label: 'Available now',
+                    icon: Clock,
+                    active: onlyAvailable,
+                    onClick: () => setOnlyAvailable(!onlyAvailable)
+                  },
+                  {
+                    label: 'Prague → Berlin trip',
+                    icon: Route,
+                    active: tripMode,
+                    onClick: () => setTripMode(!tripMode)
+                  },
+                  { label: 'Type 2 / CCS2', icon: Plug, active: false, static: true }
+                ].map((c) => (
+                  <button
+                    key={c.label}
+                    onClick={c.onClick}
+                    disabled={c.static}
+                    className={`h-8 px-3 rounded-full text-[12px] font-medium border shrink-0 flex items-center gap-1.5 transition ${
+                      c.active
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <c.icon className="w-3.5 h-3.5" />
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
+              <InteractiveMap
+                stations={filteredStations}
+                selectedStation={selectedStation}
+                onSelectStation={(st) => selectStation(st.id)}
+                showPublicDcOverlay={showPublicDcOverlay}
+                setShowPublicDcOverlay={setShowPublicDcOverlay}
+                route={tripMode ? TRIP_SCENARIO : null}
+              />
+
+              {tripMode && (
+                <TripPlanner
+                  trip={TRIP_SCENARIO}
+                  host={stations.find((s) => s.id === TRIP_SCENARIO.hostStationId)}
+                  startSoc={tripStartSoc}
+                  setStartSoc={setTripStartSoc}
+                  season={tripSeason}
+                  setSeason={setTripSeason}
+                  onBookHost={handleBookTripHost}
+                />
+              )}
+
+              <div className="flex items-center justify-between pt-1 px-0.5">
+                <span className="text-[13px] font-semibold">
+                  {filteredStations.length} chargers nearby
+                </span>
+                <span className="text-[11.5px] text-slate-500">Sorted by distance</span>
+              </div>
+
+              {filteredStations.length === 0 && (
+                <Card className="p-6 text-center text-[13px] text-slate-500">
+                  No chargers match your filters.
+                </Card>
+              )}
+
+              {filteredStations.map((station) => {
+                const isSelected = station.id === selectedStation.id;
+                return (
+                  <Card
+                    key={station.id}
+                    onClick={() => selectStation(station.id)}
+                    className={`p-3.5 cursor-pointer transition ${
+                      isSelected ? 'ring-2 ring-emerald-500 border-transparent' : 'hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex gap-3">
+                      <div
+                        className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                          station.availableNow ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        <Plug className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <h3 className="text-[14px] font-semibold leading-snug truncate">{station.title}</h3>
+                          <div className="text-right shrink-0">
+                            <div className="text-[15px] font-bold leading-none">
+                              {station.pricePerKwh.toFixed(2)}
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">CZK/kWh</div>
+                          </div>
+                        </div>
+                        <p className="text-[12px] text-slate-500 flex items-center gap-1 -mt-1 truncate">
+                          <MapPin className="w-3 h-3 shrink-0" />
+                          {station.municipality}
+                        </p>
+                        <div className="flex items-center gap-1.5 text-[11.5px] text-slate-600 mt-1.5">
+                          <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                          <span className="font-semibold">{station.rating}</span>
+                          <span className="text-slate-500">({station.reviewCount})</span>
+                          <span className="text-slate-300">•</span>
+                          <span>{station.distanceKm} km</span>
+                          <span className="text-slate-300">•</span>
+                          <span>
+                            {station.powerKw} kW {station.connector}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {station.availableNow ? (
+                          <Pill tone="green">● Available</Pill>
+                        ) : (
+                          <Pill tone="slate">In use</Pill>
+                        )}
+                        {station.hostVerified && (
+                          <Pill tone="blue" icon={BadgeCheck}>
+                            Verified host
+                          </Pill>
+                        )}
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          selectStation(station.id);
+                          setActiveScreen(2);
+                        }}
+                        className="h-8 px-3.5 rounded-full bg-emerald-700 text-white font-semibold text-[12px] hover:bg-emerald-800 flex items-center gap-0.5"
+                      >
+                        View <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ============ SCREEN 2: STATION DETAIL & TRUST ============ */}
+          {activeScreen === 2 && (
+            <div>
+              <div className="relative">
+                <MiniMap
+                  key={selectedStation.id}
+                  center={[selectedStation.lat, selectedStation.lng]}
+                  zoom={15}
+                  privacyRadius={250}
+                  className="h-48"
+                />
+                <div className="absolute bottom-6 left-3 z-[1000] bg-white/95 backdrop-blur rounded-full pl-2 pr-3 py-1.5 text-[11px] font-medium text-slate-700 shadow-md flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-emerald-700" />
+                  Approximate area · exact address after booking
+                </div>
+              </div>
+
+              <div className="px-4 -mt-4 relative z-[1001] space-y-3 pb-4">
+                <Card className="p-4">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Pill tone="green">{selectedStation.zoneType}</Pill>
+                    {selectedStation.instantBook ? (
+                      <Pill tone="blue" icon={Zap}>
+                        Instant book
+                      </Pill>
+                    ) : (
+                      <Pill tone="amber">Host approval</Pill>
+                    )}
+                  </div>
+                  <h2 className="text-[20px] font-bold tracking-tight leading-snug mt-2">
+                    {selectedStation.title}
+                  </h2>
+                  <p className="text-[12.5px] text-slate-500 mt-0.5">{selectedStation.municipality}</p>
+                  <div className="flex items-center gap-1.5 text-[12.5px] mt-2">
+                    <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
+                    <span className="font-semibold">{selectedStation.rating}</span>
+                    <span className="text-slate-500">· {selectedStation.reviewCount} reviews</span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-slate-500">{selectedStation.distanceKm} km away</span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 mt-4">
+                    <Stat label="Power" value={`${selectedStation.powerKw} kW`} sub={`AC · ${selectedStation.connector}`} />
+                    <Stat
+                      label="Energy"
+                      value={selectedStation.pricePerKwh.toFixed(2)}
+                      sub="CZK / kWh"
+                      accent="text-emerald-700"
+                    />
+                    <Stat label="Parking" value={selectedStation.hourlyFee} sub="CZK / hour" />
+                  </div>
+                </Card>
+
+                {/* Rural gap comparison */}
+                <Card className="p-4">
+                  <div className="flex items-center gap-2 text-[13px] font-semibold">
+                    <Route className="w-4 h-4 text-emerald-700" /> Detour saved
+                  </div>
+                  <div className="mt-3 space-y-2.5">
+                    {[
+                      { label: 'Nearest public fast charger', km: selectedStation.nearestPublicDcKm, color: 'bg-amber-400' },
+                      { label: 'This shared home charger', km: selectedStation.distanceKm, color: 'bg-emerald-500' }
+                    ].map((row) => (
+                      <div key={row.label}>
+                        <div className="flex justify-between text-[12px]">
+                          <span className="text-slate-600">{row.label}</span>
+                          <span className="font-semibold">{row.km} km</span>
+                        </div>
+                        <div className="h-1.5 bg-slate-100 rounded-full mt-1 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${row.color}`}
+                            style={{
+                              width: `${Math.max(4, (row.km / Math.max(selectedStation.nearestPublicDcKm, selectedStation.distanceKm)) * 100)}%`
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+
+                {/* Host & trust (FR-06, NFR-03) */}
+                <Card className="p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-full bg-gradient-to-br from-emerald-400 to-teal-600 text-white flex items-center justify-center font-bold text-[14px]">
+                      {initials(selectedStation.hostName)}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-slate-500">Hosted by</div>
+                      <div className="text-[14px] font-semibold truncate">{selectedStation.hostName}</div>
+                      <div className="text-[11.5px] text-slate-500 truncate">{selectedStation.hardwareModel}</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {selectedStation.hostVerified && (
+                      <Pill tone="green" icon={ShieldCheck}>
+                        ID verified
+                      </Pill>
+                    )}
+                    {selectedStation.hardwareVerified ? (
+                      <Pill tone="green" icon={Gauge}>
+                        Meter verified
+                      </Pill>
+                    ) : (
+                      <Pill tone="amber" icon={Gauge}>
+                        Meter check pending
+                      </Pill>
+                    )}
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200/70 rounded-xl p-3 flex items-start gap-2.5 text-[11.5px] text-amber-900 leading-relaxed">
+                    <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                    <div>
+                      <strong>Host privacy protected.</strong> The exact address and gate PIN are hidden inside{' '}
+                      <span className="font-medium">{selectedStation.publicAreaLabel}</span> until your booking is
+                      confirmed.
+                    </div>
+                  </div>
+                </Card>
+
+                {/* Reviews */}
+                <Card className="p-4">
+                  <SectionTitle
+                    right={
+                      <span className="text-[12px] text-slate-500 flex items-center gap-1">
+                        <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                        {selectedStation.rating} · {selectedStation.reviewCount}
+                      </span>
+                    }
+                  >
+                    Guest reviews
+                  </SectionTitle>
+                  {selectedStation.reviews.length === 0 ? (
+                    <p className="text-[12.5px] text-slate-500">New listing — be the first to review!</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {selectedStation.reviews.map((rev) => (
+                        <div key={rev.id} className="pt-3 first:pt-0 border-t first:border-t-0 border-slate-100">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-[11px] font-bold">
+                              {initials(rev.guest)}
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-[12.5px] font-semibold">{rev.guest}</div>
+                              <div className="flex items-center gap-1 text-[10.5px] text-slate-500">
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                  <Star
+                                    key={i}
+                                    className={`w-2.5 h-2.5 ${i < rev.rating ? 'text-amber-400 fill-amber-400' : 'text-slate-200 fill-slate-200'}`}
+                                  />
+                                ))}
+                                <span className="ml-1">{rev.date}</span>
+                              </div>
+                            </div>
+                            <Pill tone="green">{rev.tag}</Pill>
+                          </div>
+                          <p className="text-[12.5px] text-slate-600 mt-2 leading-relaxed">{rev.comment}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </div>
+
+              {/* Sticky CTA */}
+              <div className="sticky bottom-0 z-[1001] bg-white/95 backdrop-blur border-t border-slate-200 px-4 py-3 flex items-center gap-3">
+                <div>
+                  <div className="text-[16px] font-bold leading-none">
+                    {selectedStation.pricePerKwh.toFixed(2)} <span className="text-[11px] font-medium text-slate-500">CZK/kWh</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">+ {selectedStation.hourlyFee} CZK/h parking</div>
+                </div>
+                <PrimaryButton className="flex-1" onClick={() => setActiveScreen(3)}>
+                  Choose time slot
+                </PrimaryButton>
+              </div>
+            </div>
+          )}
+
+          {/* ============ SCREEN 3: SLOT BOOKING & RANGE ============ */}
+          {activeScreen === 3 && (
+            <div>
+              <div className="px-4 pt-3 pb-4 space-y-3">
+                <Card className="p-3 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                    <Plug className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[13.5px] font-semibold truncate">{selectedStation.title}</div>
+                    <div className="text-[11.5px] text-slate-500">
+                      {selectedStation.powerKw} kW · {selectedStation.pricePerKwh.toFixed(2)} CZK/kWh ·{' '}
+                      {selectedStation.hourlyFee} CZK/h
+                    </div>
+                  </div>
+                </Card>
+
+                {/* Slot grid (FR-05) */}
+                <Card className="p-4">
+                  <SectionTitle
+                    right={<span className="text-[12px] text-slate-500">Today · {todayLabel()}</span>}
+                  >
+                    Select hours
+                  </SectionTitle>
+                  <div className="grid grid-cols-4 gap-2">
+                    {selectedStation.availableSlots.map((slot) => {
+                      const isOccupied = selectedStation.bookedSlots.includes(slot);
+                      const isPicked = selectedSlots.includes(slot);
+                      return (
+                        <button
+                          key={slot}
+                          disabled={isOccupied}
+                          onClick={() => toggleTimeSlot(slot)}
+                          className={`h-10 rounded-xl text-[12.5px] font-semibold border transition ${
+                            isOccupied
+                              ? 'bg-slate-50 text-slate-300 border-slate-100 line-through cursor-not-allowed'
+                              : isPicked
+                              ? 'bg-emerald-700 text-white border-emerald-600 shadow-sm'
+                              : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-400'
+                          }`}
+                        >
+                          {slot}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center justify-between mt-3 text-[11px] text-slate-500">
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded bg-emerald-700" /> Selected
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded border border-slate-300" /> Free
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded bg-slate-100" /> Booked
+                      </span>
+                    </div>
+                    <span className="font-semibold text-slate-800">
+                      {formatSlotRange(selectedSlots)} · {selectedSlots.length} h
+                    </span>
+                  </div>
+                </Card>
+
+                {/* Range anxiety & SoC (SO6 / FR-07) */}
+                <Card className="p-4 space-y-3">
+                  <SectionTitle right={<span className="text-[11.5px] text-slate-500">{VEHICLE_BATTERY_KWH} kWh battery</span>}>
+                    <span className="flex items-center gap-1.5">
+                      <Car className="w-4 h-4 text-emerald-700" /> Your battery
+                    </span>
+                  </SectionTitle>
+
+                  {/* Battery visual */}
+                  <div className="relative h-7 rounded-lg bg-slate-100 overflow-hidden">
+                    <div className="absolute inset-y-0 left-0 bg-amber-400" style={{ width: `${currentSoc}%` }} />
+                    <div
+                      className="absolute inset-y-0 bg-emerald-500"
+                      style={{ left: `${currentSoc}%`, width: `${session.socDeparture - currentSoc}%` }}
+                    />
+                    <div className="absolute inset-0 flex items-center justify-between px-2.5 text-[11px] font-bold text-slate-800">
+                      <span>{currentSoc}%</span>
+                      <span>{session.socDeparture}%</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-[12px] mb-1">
+                      <span className="text-slate-600">Battery on arrival</span>
+                      <span className="font-semibold text-amber-700">{currentSoc}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="80"
+                      value={currentSoc}
+                      onChange={(e) => setCurrentSoc(Number(e.target.value))}
+                      className="w-full accent-emerald-600"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Energy added" value={`+${session.energyKwh.toFixed(1)}`} sub="kWh" accent="text-emerald-700" />
+                    <Stat label="Departure" value={`${session.socDeparture}%`} sub={`from ${currentSoc}%`} />
+                    <Stat label="Range added" value={`+${session.rangeKm}`} sub="km" accent="text-emerald-700" />
+                  </div>
+
+                  {session.batteryCapped && (
+                    <div className="flex items-start gap-2 text-[11.5px] text-sky-800 bg-sky-50 rounded-xl p-2.5">
+                      <Info className="w-4 h-4 shrink-0 mt-px" />
+                      Your battery will be full before the slot ends — you only pay for the energy actually delivered.
+                    </div>
+                  )}
+                </Card>
+
+                {/* Price breakdown (Section 3.5) */}
+                <Card className="p-4 text-[12.5px]">
+                  <SectionTitle>Price breakdown</SectionTitle>
+                  <div className="space-y-2 text-slate-600">
+                    <div className="flex justify-between">
+                      <span>
+                        Energy · {session.energyKwh.toFixed(1)} kWh × {selectedStation.pricePerKwh.toFixed(2)}
+                      </span>
+                      <span className="text-slate-900">{formatCzk(session.energyCost, 2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>
+                        Parking · {session.hours} h × {selectedStation.hourlyFee}
+                      </span>
+                      <span className="text-slate-900">{formatCzk(session.occupancyCost, 2)}</span>
+                    </div>
+                  </div>
+                  <div className="border-t border-slate-100 mt-3 pt-3 flex justify-between text-[15px] font-bold">
+                    <span>Total</span>
+                    <span>{formatCzk(session.totalCost, 2)}</span>
+                  </div>
+                  <p className="text-[10.5px] text-slate-500 mt-1">
+                    Includes {Math.round(PLATFORM_COMMISSION * 100)}% ChargePeer service fee. Charged after the session.
+                  </p>
+                </Card>
+              </div>
+
+              <div className="sticky bottom-0 z-[1001] bg-white border-t border-slate-200 px-4 pt-4 pb-1.5">
+                <PrimaryButton
+                  className="w-full"
+                  disabled={selectedSlots.length === 0}
+                  onClick={handleConfirmBooking}
+                >
+                  {selectedSlots.length === 0
+                    ? 'Select at least one hour'
+                    : `Confirm booking · ${formatCzk(session.totalCost)}`}
+                </PrimaryButton>
+              </div>
+            </div>
+          )}
+
+          {/* ============ SCREEN 4: ACCESS UNLOCK & RATING ============ */}
+          {activeScreen === 4 && !activeBooking && (
+            <div className="p-8 text-center text-slate-500 text-[13px]">
+              <CalendarCheck className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+              No bookings yet. Find a charger on the Explore tab.
+            </div>
+          )}
+          {activeScreen === 4 && activeBooking && (
+            <div className="px-4 pt-3 pb-6 space-y-3">
+              <Card className="overflow-hidden">
+                <div
+                  className={`px-4 py-2.5 flex items-center justify-between text-[11.5px] font-semibold ${
+                    activeBooking.status === 'COMPLETED'
+                      ? 'bg-slate-100 text-slate-600'
+                      : 'bg-emerald-700 text-white'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    {activeBooking.status === 'COMPLETED' ? (
+                      <CheckCircle2 className="w-4 h-4" />
+                    ) : (
+                      <Unlock className="w-4 h-4" />
+                    )}
+                    {activeBooking.status === 'COMPLETED' ? 'Completed' : 'Confirmed · access unlocked'}
+                  </span>
+                  <span className="font-mono opacity-80">{activeBooking.bookingId}</span>
+                </div>
+
+                <div className="p-4 pb-3">
+                  <h2 className="text-[17px] font-bold leading-snug">{activeBooking.stationTitle}</h2>
+                  <div className="flex items-center gap-3 text-[12px] text-slate-500 mt-1">
+                    <span className="flex items-center gap-1">
+                      <CalendarCheck className="w-3.5 h-3.5" /> {activeBooking.date || 'Today'}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" /> {formatSlotRange(activeBooking.slots)}
+                    </span>
+                  </div>
+                </div>
+
+                <MiniMap
+                  key={activeBooking.bookingId}
+                  center={[activeBooking.exactLat, activeBooking.exactLng]}
+                  zoom={16}
+                  exactPin
+                  className="h-40"
+                />
+
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                      <MapPin className="w-[18px] h-[18px]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11px] text-slate-500">Exact driveway address</div>
+                      <div className="text-[13px] font-semibold leading-snug">{activeBooking.exactAddress}</div>
+                    </div>
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${activeBooking.exactLat},${activeBooking.exactLng}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="h-9 px-3 rounded-full bg-slate-900 text-white text-[12px] font-semibold flex items-center gap-1 shrink-0"
+                    >
+                      <Navigation className="w-3.5 h-3.5" /> Go
+                    </a>
+                  </div>
+
+                  <div className="rounded-2xl bg-slate-900 text-white p-4 flex items-center justify-between">
+                    <div>
+                      <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                        <KeyRound className="w-3.5 h-3.5" /> Gate keypad PIN
+                      </div>
+                      <div className="font-mono text-[26px] font-bold tracking-[0.15em] mt-0.5">
+                        {activeBooking.gatePin}
+                      </div>
+                    </div>
+                    <div className="text-right text-[10.5px] text-slate-500 leading-snug">
+                      Valid only during
+                      <br />
+                      <span className="text-white font-semibold">{formatSlotRange(activeBooking.slots)}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Stat label="Energy" value={`${activeBooking.energyKwh} kWh`} />
+                    <Stat label="Total" value={formatCzk(activeBooking.totalCostCzk)} accent="text-emerald-700" />
+                  </div>
+                </div>
+              </Card>
+
+              {/* Rating (FR-06) */}
+              <Card className="p-4 space-y-3">
+                <SectionTitle right={<Pill tone="green" icon={ShieldCheck}>Builds trust</Pill>}>
+                  {activeBooking.rated ? 'Your review' : 'Rate your charging session'}
+                </SectionTitle>
+
+                <div className="flex items-center justify-center gap-2 py-1">
+                  {[1, 2, 3, 4, 5].map((star) => {
+                    const value = activeBooking.rated ? activeBooking.givenRating || reviewRating : reviewRating;
+                    return (
+                      <button
+                        key={star}
+                        disabled={activeBooking.rated}
+                        onClick={() => setReviewRating(star)}
+                        className="p-0.5"
+                      >
+                        <Star
+                          className={`w-8 h-8 transition ${
+                            value >= star ? 'text-amber-400 fill-amber-400' : 'text-slate-200 fill-slate-200'
+                          }`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {!activeBooking.rated && (
+                  <>
+                    <div className="flex flex-wrap gap-1.5">
+                      {['Saved Rural Trip', 'Accurate kW Speed', 'Easy Driveway Access', 'Fair kWh Tariff'].map(
+                        (tag) => (
+                          <button
+                            key={tag}
+                            onClick={() => setReviewTag(tag)}
+                            className={`h-8 px-3 rounded-full text-[11.5px] font-medium border transition ${
+                              reviewTag === tag
+                                ? 'bg-emerald-700 text-white border-emerald-600'
+                                : 'bg-white text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {tag}
+                          </button>
+                        )
+                      )}
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={reviewComment}
+                      onChange={(e) => setReviewComment(e.target.value)}
+                      placeholder="How was the charger and the host?"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-[13px] placeholder-slate-500 focus:outline-none focus:border-emerald-500 resize-none"
+                    />
+                  </>
+                )}
+
+                <PrimaryButton
+                  className="w-full"
+                  disabled={activeBooking.rated}
+                  onClick={() => handleSubmitReview(activeBooking.bookingId)}
+                >
+                  {activeBooking.rated ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" /> Session completed · review saved
+                    </>
+                  ) : (
+                    'Finish charging & submit review'
+                  )}
+                </PrimaryButton>
+              </Card>
+
+              {bookings.length > 1 && (
+                <div>
+                  <SectionTitle>Other bookings</SectionTitle>
+                  <div className="space-y-2">
+                    {bookings
+                      .filter((b) => b.bookingId !== activeBooking.bookingId)
+                      .map((b) => (
+                        <Card
+                          key={b.bookingId}
+                          onClick={() => setActiveBookingId(b.bookingId)}
+                          className="p-3 flex items-center justify-between cursor-pointer hover:border-slate-300"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-[13px] font-semibold truncate">{b.stationTitle}</div>
+                            <div className="text-[11px] text-slate-500">
+                              {formatSlotRange(b.slots)} · {b.status === 'COMPLETED' ? 'Completed' : 'Confirmed'}
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-slate-500" />
+                        </Card>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ============ SCREEN 5: HOST ONBOARDING (FR-04) ============ */}
+          {activeScreen === 5 && (
+            <form onSubmit={handleCreateHostListing}>
+              <div className="px-4 pt-3 pb-4 space-y-3">
+                <Card className="p-4 space-y-3.5">
+                  <div className="flex items-center gap-2 text-[13px] font-semibold">
+                    <Sparkles className="w-4 h-4 text-emerald-700" /> Listing details
+                  </div>
+                  <Field label="Listing title">
+                    <input
+                      type="text"
+                      required
+                      value={newStationForm.title}
+                      onChange={(e) => setNewStationForm({ ...newStationForm, title: e.target.value })}
+                      className={inputCls}
+                    />
+                  </Field>
+                  <Field label="Municipality / region">
+                    <input
+                      type="text"
+                      required
+                      value={newStationForm.municipality}
+                      onChange={(e) => setNewStationForm({ ...newStationForm, municipality: e.target.value })}
+                      className={inputCls}
+                    />
+                  </Field>
+                </Card>
+
+                <Card className="overflow-hidden">
+                  <div className="px-4 pt-4 pb-2">
+                    <div className="text-[13px] font-semibold">Charger location</div>
+                    <p className="text-[11.5px] text-slate-500">
+                      Tap the map or drag the pin. Guests only see a 250 m area until they book.
+                    </p>
+                  </div>
+                  <MiniMap
+                    center={[newStationForm.lat, newStationForm.lng]}
+                    zoom={14}
+                    exactPin
+                    picker
+                    onPick={(ll) => setNewStationForm((f) => ({ ...f, lat: ll.lat, lng: ll.lng }))}
+                    className="h-44"
+                  />
+                  <div className="px-4 py-3 space-y-3">
+                    <Field label="Exact driveway address" hint="Shared with guests only after a confirmed booking">
+                      <input
+                        type="text"
+                        required
+                        value={newStationForm.exactAddress}
+                        onChange={(e) => setNewStationForm({ ...newStationForm, exactAddress: e.target.value })}
+                        className={inputCls}
+                      />
+                    </Field>
+                    <Field label="Gate PIN for guests">
+                      <input
+                        type="text"
+                        value={newStationForm.gatePin}
+                        onChange={(e) => setNewStationForm({ ...newStationForm, gatePin: e.target.value })}
+                        className={`${inputCls} font-mono`}
+                      />
+                    </Field>
+                  </div>
+                </Card>
+
+                <Card className="p-4 space-y-3">
+                  <div className="text-[13px] font-semibold">Hardware & pricing</div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <Field label="Power output">
+                      <select
+                        value={newStationForm.powerKw}
+                        onChange={(e) => setNewStationForm({ ...newStationForm, powerKw: Number(e.target.value) })}
+                        className={inputCls}
+                      >
+                        <option value={7.4}>7.4 kW · 1-phase</option>
+                        <option value={11}>11 kW · 3-phase</option>
+                        <option value={22}>22 kW · 3-phase</option>
+                      </select>
+                    </Field>
+                    <Field label="Connector">
+                      <select
+                        value={newStationForm.connector}
+                        onChange={(e) => setNewStationForm({ ...newStationForm, connector: e.target.value })}
+                        className={inputCls}
+                      >
+                        <option>Type 2</option>
+                        <option>CCS2 / Type 2</option>
+                      </select>
+                    </Field>
+                    <Field label="Price (CZK / kWh)">
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={newStationForm.pricePerKwh}
+                        onChange={(e) => setNewStationForm({ ...newStationForm, pricePerKwh: e.target.value })}
+                        className={`${inputCls} font-semibold text-emerald-700`}
+                      />
+                    </Field>
+                    <Field label="Parking (CZK / hour)">
+                      <input
+                        type="number"
+                        step="1"
+                        min="0"
+                        value={newStationForm.hourlyFee}
+                        onChange={(e) => setNewStationForm({ ...newStationForm, hourlyFee: e.target.value })}
+                        className={inputCls}
+                      />
+                    </Field>
+                  </div>
+                </Card>
+
+                {/* Earnings estimator (Section 3.5 R_host) */}
+                <Card className="p-4 bg-gradient-to-br from-emerald-50 to-white border-emerald-200/70">
+                  <div className="flex items-center gap-2 text-[13px] font-semibold text-emerald-800">
+                    <Wallet className="w-4 h-4" /> Estimated earnings
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Per 4-hour session at {newStationForm.powerKw} kW ({hostEstimate.energy.toFixed(1)} kWh)
+                  </p>
+                  <div className="mt-3 space-y-1.5 text-[12.5px]">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Guest pays</span>
+                      <span>{formatCzk(hostEstimate.gross, 1)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>After {Math.round(PLATFORM_COMMISSION * 100)}% service fee</span>
+                      <span>{formatCzk(hostEstimate.afterFee, 1)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>Electricity cost ({DEFAULT_GRID_COST.toFixed(2)} CZK/kWh)</span>
+                      <span>− {formatCzk(hostEstimate.energy * DEFAULT_GRID_COST, 1)}</span>
+                    </div>
+                  </div>
+                  <div className="border-t border-emerald-200/70 mt-2.5 pt-2.5 flex justify-between items-baseline">
+                    <span className="text-[13px] font-semibold">Your profit</span>
+                    <span className={`text-[20px] font-bold ${hostEstimate.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                      {hostEstimate.net >= 0 ? '+' : ''}
+                      {formatCzk(hostEstimate.net, 1)}
+                    </span>
+                  </div>
+                </Card>
+              </div>
+
+              <div className="sticky bottom-0 z-[1001] bg-white border-t border-slate-200 px-4 pt-4 pb-1.5">
+                <PrimaryButton type="submit" className="w-full">
+                  <PlusCircle className="w-4 h-4" /> Publish charger
+                </PrimaryButton>
+              </div>
+            </form>
+          )}
+
+          {/* ============ SCREEN 6: PROFILE, ROLES & EARNINGS ============ */}
+          {activeScreen === 6 && (
+            <div className="px-4 pt-3 pb-6 space-y-3">
+              <Card className="p-4 flex items-center gap-3.5">
+                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-400 to-teal-600 text-white flex items-center justify-center font-bold text-[18px]">
+                  {DEMO_USER.initials}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-[16px] font-bold">{DEMO_USER.name}</h2>
+                  <p className="text-[12px] text-slate-500">{DEMO_USER.homeArea}</p>
+                  <div className="flex gap-1.5 mt-1.5">
+                    <Pill tone="green" icon={BadgeCheck}>
+                      Verified
+                    </Pill>
+                    <Pill tone="slate">Driver & Host</Pill>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Dual-role switch (FR-01) */}
+              <div className="bg-slate-200/70 p-1 rounded-xl grid grid-cols-2 text-[12.5px] font-semibold">
+                {[
+                  { role: 'GUEST', label: 'EV driver' },
+                  { role: 'HOST', label: 'Charger host' }
+                ].map((r) => (
+                  <button
+                    key={r.role}
+                    onClick={() => setUserRole(r.role)}
+                    className={`h-9 rounded-lg transition ${
+                      userRole === r.role ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500'
+                    }`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+
+              {userRole === 'HOST' ? (
+                <Card className="p-4">
+                  <SectionTitle right={<span className="text-[11.5px] text-slate-500">{myStations.length} listing(s)</span>}>
+                    Host summary
+                  </SectionTitle>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Sessions" value={HOST_BASELINE_STATS.sessions} />
+                    <Stat label="Energy shared" value={HOST_BASELINE_STATS.energyKwh} sub="kWh" accent="text-emerald-700" />
+                    <Stat
+                      label="Net earnings"
+                      value={HOST_BASELINE_STATS.netEarningsCzk.toLocaleString('en-US')}
+                      sub="CZK"
+                      accent="text-emerald-700"
+                    />
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    {myStations.map((s) => (
+                      <div key={s.id} className="flex items-center justify-between text-[12.5px] bg-slate-50 rounded-xl px-3 py-2.5">
+                        <span className="font-medium truncate">{s.title}</span>
+                        <span className="text-slate-500 shrink-0 ml-2">{s.pricePerKwh.toFixed(2)} CZK/kWh</span>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              ) : (
+                <Card className="p-4">
+                  <SectionTitle>Driver summary</SectionTitle>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Bookings" value={bookings.length} />
+                    <Stat label="Energy" value={driverKwh.toFixed(0)} sub="kWh" accent="text-emerald-700" />
+                    <Stat label="Spent" value={driverSpend.toFixed(0)} sub="CZK" />
+                  </div>
+                </Card>
+              )}
+
+              <div>
+                <SectionTitle>Recent bookings</SectionTitle>
+                <div className="space-y-2">
+                  {bookings.map((bk) => (
+                    <Card
+                      key={bk.bookingId}
+                      onClick={() => {
+                        setActiveBookingId(bk.bookingId);
+                        setActiveScreen(4);
+                      }}
+                      className="p-3 flex items-center gap-3 cursor-pointer hover:border-slate-300"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                        <BatteryCharging className="w-5 h-5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13px] font-semibold truncate">{bk.stationTitle}</div>
+                        <div className="text-[11px] text-slate-500">
+                          {formatSlotRange(bk.slots)} · {bk.energyKwh} kWh
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[13px] font-bold">{formatCzk(bk.totalCostCzk)}</div>
+                        <div
+                          className={`text-[10.5px] font-medium ${
+                            bk.status === 'COMPLETED' ? 'text-slate-500' : 'text-emerald-700'
+                          }`}
+                        >
+                          {bk.status === 'COMPLETED' ? 'Completed' : 'Confirmed'}
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Bottom tab bar */}
+        <nav className="relative shrink-0 bg-white/95 backdrop-blur border-t border-slate-200 pt-1.5 pb-6 grid grid-cols-4">
+          {[
+            { screen: 1, label: 'Explore', icon: Compass, also: [2, 3] },
+            { screen: 4, label: 'Bookings', icon: CalendarCheck },
+            { screen: 5, label: 'Host', icon: PlusCircle },
+            { screen: 6, label: 'Profile', icon: User }
+          ].map((item) => {
+            const Icon = item.icon;
+            const active = activeScreen === item.screen || item.also?.includes(activeScreen);
+            return (
+              <button
+                key={item.screen}
+                onClick={() => setActiveScreen(item.screen)}
+                className={`flex flex-col items-center gap-0.5 py-1 text-[10.5px] font-medium transition ${
+                  active ? 'text-emerald-700' : 'text-slate-500 hover:text-slate-600'
+                }`}
+              >
+                <Icon className="w-6 h-6" strokeWidth={active ? 2.3 : 1.8} />
+                {item.label}
+              </button>
+            );
+          })}
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-[134px] h-[5px] rounded-full bg-slate-900" />
+        </nav>
+      </div>
+    </div>
+  );
+
+  const scaledPhone = (
+    <div className="shrink-0" style={{ width: PHONE_W * scale, height: PHONE_H * scale }}>
+      <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left', width: PHONE_W, height: PHONE_H }}>
+        {phone}
+      </div>
+    </div>
+  );
+
+  /* ================================================================ */
+  /* Screenshot mode: only the phone on a neutral background          */
+  /* ================================================================ */
+  if (screenshotMode) {
+    return (
+      <div className="min-h-screen bg-[#e9edf1] flex items-center justify-center p-6">
+        {scaledPhone}
+        <div className="fixed bottom-4 right-4 flex items-center gap-1 bg-white/90 backdrop-blur rounded-full shadow-lg px-2 py-1.5 opacity-40 hover:opacity-100 transition">
+          {[1, 2, 3, 4, 5, 6].map((n) => (
+            <button
+              key={n}
+              onClick={() => setActiveScreen(n)}
+              className={`w-7 h-7 rounded-full text-[12px] font-semibold ${
+                activeScreen === n ? 'bg-emerald-700 text-white' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {n}
+            </button>
+          ))}
+          <button
+            onClick={() => setScreenshotMode(false)}
+            className="ml-1 h-7 px-3 rounded-full bg-slate-900 text-white text-[11px] font-semibold"
+          >
+            Exit (Esc)
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {/* Top Thesis Header Bar */}
+      {/* Top thesis header bar */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-emerald-500/20">
+          <div className="w-9 h-9 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 shadow-lg shadow-emerald-500/20">
             <Zap className="w-5 h-5 fill-current" />
           </div>
           <div>
@@ -236,747 +1513,30 @@ export default function App() {
                 Diploma Thesis • Abhinav Kumar Parbat
               </span>
             </h1>
-            <p className="text-xs text-slate-400">
-              FEM CZU Prague • Supervisor: Ing. Petr Benda, Ph.D.
-            </p>
+            <p className="text-xs text-slate-500">FEM CZU Prague • Supervisor: Ing. Petr Benda, Ph.D.</p>
           </div>
         </div>
 
         <button
-          onClick={() => setScreenshotMode(!screenshotMode)}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold border transition ${
-            screenshotMode
-              ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-              : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-          }`}
+          onClick={() => setScreenshotMode(true)}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold border bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700 transition"
         >
           <Camera className="w-4 h-4" />
-          {screenshotMode ? 'Exit Screenshot Mode' : 'Chapter 4 Screenshot Mode (Phone Only)'}
+          Screenshot mode (phone only)
         </button>
       </header>
 
-      {/* Main Workspace */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex items-center justify-center gap-8">
-        {/* iPhone 15 Pro Mobile Frame */}
-        <div className="w-[390px] h-[812px] bg-slate-950 rounded-[48px] border-[10px] border-slate-800 shadow-2xl relative flex flex-col overflow-hidden shrink-0">
-          {/* Dynamic Island Notch */}
-          <div className="bg-slate-900 pt-2 pb-2 px-6 flex items-center justify-between text-[11px] font-semibold text-slate-300 border-b border-slate-800/80">
-            <span>09:41</span>
-            <div className="w-20 h-4 bg-black rounded-full" />
-            <div className="flex items-center gap-1.5 text-emerald-400">
-              <span>5G</span>
-              <BatteryCharging className="w-3.5 h-3.5" />
-            </div>
-          </div>
-
-          {/* App Sub-Header with Role Pill */}
-          <div className="bg-slate-900/95 px-4 py-2.5 flex items-center justify-between border-b border-slate-800">
-            <div className="flex items-center gap-2">
-              {activeScreen !== 1 && (
-                <button
-                  onClick={() => setActiveScreen(1)}
-                  className="p-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                </button>
-              )}
-              <div>
-                <div className="text-xs font-extrabold tracking-tight text-white flex items-center gap-1">
-                  ChargePeer <span className="text-emerald-400">P2P</span>
-                </div>
-                <div className="text-[10px] text-slate-400">
-                  Screen {activeScreen} of 6 • {userRole === 'GUEST' ? 'EV Driver Mode' : 'Charger Host Mode'}
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => {
-                const nextRole = userRole === 'GUEST' ? 'HOST' : 'GUEST';
-                setUserRole(nextRole);
-                setActiveScreen(nextRole === 'HOST' ? 5 : 1);
-              }}
-              className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 transition"
-            >
-              Switch to {userRole === 'GUEST' ? 'Host' : 'Driver'}
-            </button>
-          </div>
-
-          {/* Toast Alert Banner */}
-          {toastMessage && (
-            <div className="mx-3 mt-2 bg-emerald-500 text-slate-950 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>{toastMessage}</span>
-            </div>
-          )}
-
-          {/* Screen Body Content */}
-          <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-950">
-            {/* SCREEN 1: GEOLOCATION MAP & STATION DISCOVERY */}
-            {activeScreen === 1 && (
-              <>
-                {/* Search Input */}
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search rural town (Kvilda, Telč, Jeseníky, Suchdol)..."
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-
-                {/* Quick Filter Chips (FR-03) */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                  <button
-                    onClick={() => setMinPowerFilter(minPowerFilter === 22 ? 0 : 22)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold border shrink-0 flex items-center gap-1 ${
-                      minPowerFilter === 22
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
-                        : 'bg-slate-900 text-slate-300 border-slate-800'
-                    }`}
-                  >
-                    <SlidersHorizontal className="w-3 h-3" /> 22 kW Fast AC
-                  </button>
-                  <button
-                    onClick={() => setOnlyAvailable(!onlyAvailable)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold border shrink-0 ${
-                      onlyAvailable
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
-                        : 'bg-slate-900 text-slate-300 border-slate-800'
-                    }`}
-                  >
-                    Available Now
-                  </button>
-                  <span className="px-2 py-1 rounded-lg text-[10px] bg-slate-900/60 text-slate-400 border border-slate-800/80 shrink-0">
-                    Type 2 / CCS2
-                  </span>
-                </div>
-
-                {/* Interactive Czech Map */}
-                <InteractiveMap
-                  stations={filteredStations}
-                  selectedStation={selectedStation}
-                  onSelectStation={(st) => setSelectedStationId(st.id)}
-                  showPublicDcOverlay={showPublicDcOverlay}
-                  setShowPublicDcOverlay={setShowPublicDcOverlay}
-                />
-
-                {/* Station Cards List */}
-                <div className="space-y-2 pt-1">
-                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 px-1">
-                    <span>NEARBY SHARED PRIVATE WALLBOXES ({filteredStations.length})</span>
-                    <span className="text-emerald-400">Tap to Inspect</span>
-                  </div>
-
-                  {filteredStations.map((station) => {
-                    const isSelected = station.id === selectedStation.id;
-                    return (
-                      <div
-                        key={station.id}
-                        onClick={() => setSelectedStationId(station.id)}
-                        className={`p-3 rounded-2xl border transition cursor-pointer ${
-                          isSelected
-                            ? 'bg-slate-900 border-emerald-500/80 shadow-md'
-                            : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <span className="text-[10px] font-semibold text-emerald-400 uppercase">
-                              {station.zoneType}
-                            </span>
-                            <h3 className="text-xs font-bold text-white">{station.title}</h3>
-                            <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
-                              <MapPin className="w-3 h-3 text-slate-500" />
-                              {station.municipality}
-                            </p>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <div className="text-xs font-extrabold text-emerald-400">
-                              {station.pricePerKwh.toFixed(2)} CZK/kWh
-                            </div>
-                            <div className="text-[10px] text-slate-400">
-                              {station.powerKw} kW • {station.connector}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                          <div className="flex items-center gap-2 text-[10px]">
-                            <span className="flex items-center gap-0.5 text-amber-400 font-bold">
-                              <Star className="w-3 h-3 fill-current" /> {station.rating} ({station.reviewCount})
-                            </span>
-                            {station.hostVerified && (
-                              <span className="flex items-center gap-0.5 text-emerald-300 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-                                <ShieldCheck className="w-3 h-3" /> Verified Host
-                              </span>
-                            )}
-                          </div>
-
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedStationId(station.id);
-                              setActiveScreen(2);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-500 text-slate-950 font-bold text-[10px] hover:bg-emerald-400"
-                          >
-                            View & Book
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-
-            {/* SCREEN 2: STATION DETAIL & DIGITAL TRUST PROFILE */}
-            {activeScreen === 2 && (
-              <div className="space-y-3">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
-                      {selectedStation.zoneType}
-                    </span>
-                    <span className="text-xs font-bold text-amber-400 flex items-center gap-1">
-                      <Star className="w-3.5 h-3.5 fill-current" /> {selectedStation.rating} ({selectedStation.reviewCount} reviews)
-                    </span>
-                  </div>
-                  <h2 className="text-sm font-extrabold text-white">{selectedStation.title}</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">{selectedStation.municipality}</p>
-
-                  {/* Rural Gap Comparison Pill */}
-                  <div className="mt-3 bg-slate-950 border border-slate-800 rounded-xl p-2.5 flex items-center justify-between text-[11px]">
-                    <span className="text-slate-400">Nearest Commercial DC Charger:</span>
-                    <span className="font-bold text-amber-400">
-                      {selectedStation.nearestPublicDcKm} km away
-                    </span>
-                  </div>
-
-                  {/* Hardware & Tariff Specs */}
-                  <div className="grid grid-cols-3 gap-2 mt-3 text-center">
-                    <div className="bg-slate-950 p-2 rounded-xl border border-slate-800">
-                      <div className="text-[10px] text-slate-400">Output</div>
-                      <div className="text-xs font-extrabold text-white">{selectedStation.powerKw} kW AC</div>
-                    </div>
-                    <div className="bg-slate-950 p-2 rounded-xl border border-slate-800">
-                      <div className="text-[10px] text-slate-400">Energy Tariff</div>
-                      <div className="text-xs font-extrabold text-emerald-400">
-                        {selectedStation.pricePerKwh.toFixed(2)} CZK
-                      </div>
-                    </div>
-                    <div className="bg-slate-950 p-2 rounded-xl border border-slate-800">
-                      <div className="text-[10px] text-slate-400">Occupancy</div>
-                      <div className="text-xs font-extrabold text-white">
-                        {selectedStation.hourlyFee} CZK/h
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Host Digital Trust & Privacy Protection Box (FR-06, NFR-03) */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] text-slate-400 uppercase font-bold">Residential Host</div>
-                      <div className="text-xs font-bold text-white">{selectedStation.hostName}</div>
-                      <div className="text-[10px] text-slate-400">{selectedStation.hardwareModel}</div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 flex items-center gap-1">
-                        <ShieldCheck className="w-3 h-3" /> ID & Meter Verified
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* 250m Address Obfuscation Notice */}
-                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5 flex items-start gap-2 text-[11px] text-amber-200">
-                    <Lock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                    <div>
-                      <strong>Host Privacy Protection (NFR-03):</strong> Exact house number and gate PIN are masked inside a{' '}
-                      <span className="underline">{selectedStation.publicAreaLabel}</span> until your booking is confirmed.
-                    </div>
-                  </div>
-                </div>
-
-                {/* Bilateral Community Reviews */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-                  <div className="text-xs font-bold text-white">Verified EV Guest Reviews</div>
-                  {selectedStation.reviews.length === 0 ? (
-                    <p className="text-xs text-slate-500">Newly listed station — be the first to review!</p>
-                  ) : (
-                    selectedStation.reviews.map((rev) => (
-                      <div key={rev.id} className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="font-bold text-slate-200">{rev.guest}</span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-semibold">
-                            {rev.tag}
-                          </span>
-                        </div>
-                        <p className="text-slate-400 text-[11px]">{rev.comment}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                <button
-                  onClick={() => setActiveScreen(3)}
-                  className="w-full py-3 rounded-2xl bg-emerald-500 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 transition"
-                >
-                  Select Time Slot & Calculate Range →
-                </button>
-              </div>
-            )}
-
-            {/* SCREEN 3: CONFLICT-FREE SLOT BOOKING & RANGE CALCULATOR */}
-            {activeScreen === 3 && (
-              <div className="space-y-3">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5">
-                  <div className="text-[10px] font-bold uppercase text-emerald-400">
-                    Step 2 of 3 • Conflict-Free Reservation (FR-05)
-                  </div>
-                  <h2 className="text-sm font-bold text-white">{selectedStation.title}</h2>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Tap hourly slots below. Grey slots are already reserved in the database.
-                  </p>
-
-                  {/* Time-Slot Grid */}
-                  <div className="grid grid-cols-4 gap-1.5 mt-3">
-                    {selectedStation.availableSlots.map((slot) => {
-                      const isOccupied = selectedStation.bookedSlots.includes(slot);
-                      const isPicked = selectedSlots.includes(slot);
-                      return (
-                        <button
-                          key={slot}
-                          disabled={isOccupied}
-                          onClick={() => toggleTimeSlot(slot)}
-                          className={`py-2 rounded-xl text-[11px] font-bold border transition ${
-                            isOccupied
-                              ? 'bg-slate-950 text-slate-600 border-slate-800 line-through cursor-not-allowed'
-                              : isPicked
-                              ? 'bg-emerald-500 text-slate-950 border-emerald-300 shadow'
-                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-600'
-                          }`}
-                        >
-                          {slot}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Range Anxiety & SoC Estimator (SO6 / FR-07) */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <BatteryCharging className="w-4 h-4 text-emerald-400" />
-                      Range Anxiety & Battery SoC Calculator
-                    </span>
-                    <span className="text-[10px] text-slate-400">60 kWh EV Pack</span>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between text-[11px] mb-1">
-                      <span className="text-slate-400">Arrival Battery State of Charge (SoC):</span>
-                      <span className="font-bold text-amber-400">{currentSoc}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="5"
-                      max="80"
-                      value={currentSoc}
-                      onChange={(e) => setCurrentSoc(Number(e.target.value))}
-                      className="w-full accent-emerald-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-center bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                    <div>
-                      <div className="text-[10px] text-slate-400">Energy Added</div>
-                      <div className="text-xs font-extrabold text-emerald-400">
-                        +{energyDeliveredKwh.toFixed(1)} kWh
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-slate-400">Departure SoC</div>
-                      <div className="text-xs font-extrabold text-white">
-                        {currentSoc}% → {currentSoc + socAddedPercent}%
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-slate-400">Range Added</div>
-                      <div className="text-xs font-extrabold text-emerald-400">+{rangeKmAdded} km</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Transparent Session Cost Breakdown (Section 3.5 Equation) */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-1.5 text-xs">
-                  <div className="font-bold text-white mb-1">Transparent Tariff Breakdown (C_session)</div>
-                  <div className="flex justify-between text-slate-400">
-                    <span>
-                      Energy ({energyDeliveredKwh.toFixed(1)} kWh × {selectedStation.pricePerKwh.toFixed(2)} CZK)
-                    </span>
-                    <span>{(energyDeliveredKwh * selectedStation.pricePerKwh).toFixed(2)} CZK</span>
-                  </div>
-                  <div className="flex justify-between text-slate-400">
-                    <span>
-                      Driveway Occupancy ({durationHours} h × {selectedStation.hourlyFee} CZK/h)
-                    </span>
-                    <span>{(durationHours * selectedStation.hourlyFee).toFixed(2)} CZK</span>
-                  </div>
-                  <div className="border-t border-slate-800 pt-2 mt-1 flex justify-between font-extrabold text-sm text-emerald-400">
-                    <span>Total Estimated Cost</span>
-                    <span>{totalSessionCost.toFixed(2)} CZK</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleConfirmBooking}
-                  className="w-full py-3 rounded-2xl bg-emerald-500 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 transition"
-                >
-                  Confirm Instant Booking ({totalSessionCost.toFixed(0)} CZK)
-                </button>
-              </div>
-            )}
-
-            {/* SCREEN 4: ACTIVE SESSION, ADDRESS REVEAL & BILATERAL RATING */}
-            {activeScreen === 4 && activeBooking && (
-              <div className="space-y-3">
-                <div className="bg-emerald-500/15 border border-emerald-500/40 rounded-2xl p-3.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-extrabold uppercase text-emerald-300 flex items-center gap-1">
-                      <Unlock className="w-3.5 h-3.5" /> Booking {activeBooking.bookingId} • {activeBooking.status}
-                    </span>
-                    <span className="text-[10px] bg-slate-950 px-2 py-0.5 rounded text-slate-300 font-mono">
-                      {activeBooking.slots.join(', ')}
-                    </span>
-                  </div>
-                  <h2 className="text-sm font-extrabold text-white mt-1">
-                    {activeBooking.stationTitle}
-                  </h2>
-
-                  {/* Exact Private Address & Gate PIN Unlocked (NFR-03 Fulfilled) */}
-                  <div className="mt-3 bg-slate-950 rounded-xl p-3 border border-emerald-500/30 space-y-1.5">
-                    <div className="text-[10px] text-emerald-400 font-bold uppercase">
-                      Exact Driveway Coordinates Unlocked:
-                    </div>
-                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <Navigation className="w-3.5 h-3.5 text-emerald-400" />
-                      {activeBooking.exactAddress}
-                    </div>
-                    <div className="flex items-center justify-between pt-1.5 border-t border-slate-800 text-xs">
-                      <span className="text-slate-400">Smart Gate Keypad PIN:</span>
-                      <span className="font-mono font-extrabold text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded">
-                        {activeBooking.gatePin}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Bilateral Digital Trust Rating Box (FR-06) */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold text-white">
-                      Complete Session & Rate Host (FR-06)
-                    </h3>
-                    <span className="text-[10px] text-emerald-400 font-semibold">Bilateral Trust</span>
-                  </div>
-
-                  {/* 1-5 Star Selector */}
-                  <div className="flex items-center gap-2">
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <button
-                        key={star}
-                        onClick={() => setReviewRating(star)}
-                        className={`p-1.5 rounded-lg border ${
-                          reviewRating >= star
-                            ? 'bg-amber-500/20 border-amber-400 text-amber-400'
-                            : 'bg-slate-950 border-slate-800 text-slate-600'
-                        }`}
-                      >
-                        <Star className="w-4 h-4 fill-current" />
-                      </button>
-                    ))}
-                    <span className="text-xs font-bold text-amber-400 ml-1">{reviewRating}.0 / 5.0</span>
-                  </div>
-
-                  {/* Structured Trust Tags */}
-                  <div className="flex flex-wrap gap-1.5">
-                    {['Saved Rural Trip', 'Accurate kW Speed', 'Easy Driveway Access', 'Fair kWh Tariff'].map(
-                      (tag) => (
-                        <button
-                          key={tag}
-                          onClick={() => setReviewTag(tag)}
-                          className={`px-2 py-1 rounded-lg text-[10px] font-semibold border ${
-                            reviewTag === tag
-                              ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
-                              : 'bg-slate-950 text-slate-400 border-slate-800'
-                          }`}
-                        >
-                          {tag}
-                        </button>
-                      )
-                    )}
-                  </div>
-
-                  <textarea
-                    rows={2}
-                    value={reviewComment}
-                    onChange={(e) => setReviewComment(e.target.value)}
-                    placeholder="Share your charging experience with the P2P community..."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                  />
-
-                  <button
-                    disabled={activeBooking.rated}
-                    onClick={() => handleSubmitReview(activeBooking.bookingId)}
-                    className={`w-full py-2.5 rounded-xl font-extrabold text-xs transition ${
-                      activeBooking.rated
-                        ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
-                        : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
-                    }`}
-                  >
-                    {activeBooking.rated
-                      ? '✓ Session Completed & Bilateral Review Saved'
-                      : 'Complete Charging & Submit Verified Review'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* SCREEN 5: HOST MODE — LIST A PRIVATE WALLBOX (FR-04) */}
-            {activeScreen === 5 && (
-              <form onSubmit={handleCreateHostListing} className="space-y-3">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase text-emerald-400">
-                      Host Onboarding (FR-04)
-                    </span>
-                    <Sparkles className="w-4 h-4 text-emerald-400" />
-                  </div>
-                  <h2 className="text-sm font-bold text-white">List Your Private Home Charger</h2>
-
-                  <div>
-                    <label className="text-[10px] text-slate-400 font-semibold">Station Listing Title</label>
-                    <input
-                      type="text"
-                      required
-                      value={newStationForm.title}
-                      onChange={(e) => setNewStationForm({ ...newStationForm, title: e.target.value })}
-                      className="w-full mt-0.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-slate-400 font-semibold">Municipality / Rural Region</label>
-                    <input
-                      type="text"
-                      required
-                      value={newStationForm.municipality}
-                      onChange={(e) =>
-                        setNewStationForm({ ...newStationForm, municipality: e.target.value })
-                      }
-                      className="w-full mt-0.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] text-slate-400 font-semibold">Power Output (kW)</label>
-                      <select
-                        value={newStationForm.powerKw}
-                        onChange={(e) =>
-                          setNewStationForm({ ...newStationForm, powerKw: Number(e.target.value) })
-                        }
-                        className="w-full mt-0.5 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-white"
-                      >
-                        <option value={7.4}>7.4 kW (1-Phase)</option>
-                        <option value={11}>11 kW (3-Phase)</option>
-                        <option value={22}>22 kW (3-Phase Fast)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-400 font-semibold">Price (CZK / kWh)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={newStationForm.pricePerKwh}
-                        onChange={(e) =>
-                          setNewStationForm({ ...newStationForm, pricePerKwh: e.target.value })
-                        }
-                        className="w-full mt-0.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-emerald-400 font-bold"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-slate-400 font-semibold">
-                      Private Driveway Address (Masked until booked)
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={newStationForm.exactAddress}
-                      onChange={(e) =>
-                        setNewStationForm({ ...newStationForm, exactAddress: e.target.value })
-                      }
-                      className="w-full mt-0.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Live Host Net Profit Simulator (Section 3.5 R_host Equation) */}
-                <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-3 text-xs space-y-1">
-                  <div className="font-bold text-emerald-400">
-                    Host Net Profit Estimator (4-Hour Session @ {newStationForm.powerKw} kW)
-                  </div>
-                  <div className="flex justify-between text-slate-400 text-[11px]">
-                    <span>Gross Session Tariff (minus 12% platform fee):</span>
-                    <span>
-                      {(
-                        0.88 *
-                        (newStationForm.powerKw * 4 * newStationForm.pricePerKwh +
-                          4 * newStationForm.hourlyFee)
-                      ).toFixed(1)}{' '}
-                      CZK
-                    </span>
-                  </div>
-                  <div className="flex justify-between font-bold text-white pt-1 border-t border-slate-800">
-                    <span>Net Profit Above Residential Grid Tariff (4.20 CZK):</span>
-                    <span className="text-emerald-400">
-                      +
-                      {(
-                        0.88 *
-                          (newStationForm.powerKw * 4 * newStationForm.pricePerKwh +
-                            4 * newStationForm.hourlyFee) -
-                        newStationForm.powerKw * 4 * DEFAULT_GRID_COST
-                      ).toFixed(1)}{' '}
-                      CZK / session
-                    </span>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-3 rounded-2xl bg-emerald-500 text-slate-950 font-extrabold text-xs shadow-lg hover:bg-emerald-400 transition"
-                >
-                  Publish Wallbox to P2P Network
-                </button>
-              </form>
-            )}
-
-            {/* SCREEN 6: USER PROFILE, ROLE SWITCHER & HOST EARNINGS LOG (FR-01, FR-08) */}
-            {activeScreen === 6 && (
-              <div className="space-y-3">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between">
-                  <div>
-                    <span className="text-[10px] font-bold uppercase text-emerald-400">
-                      Dual-Role Account (FR-01)
-                    </span>
-                    <h2 className="text-sm font-extrabold text-white">Abhinav Kumar Parbat</h2>
-                    <p className="text-[11px] text-slate-400">
-                      Verified EV Guest & Residential Host • Praha-Suchdol
-                    </p>
-                  </div>
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300 font-extrabold text-sm">
-                    AP
-                  </div>
-                </div>
-
-                {/* Host Revenue Summary Card (FR-08) */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-                  <div className="text-xs font-bold text-white">
-                    Host Revenue & Energy Shared Summary (FR-08)
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                      <div className="text-[10px] text-slate-400">Sessions</div>
-                      <div className="text-xs font-extrabold text-white">{14 + bookings.length}</div>
-                    </div>
-                    <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                      <div className="text-[10px] text-slate-400">Energy Shared</div>
-                      <div className="text-xs font-extrabold text-emerald-400">418 kWh</div>
-                    </div>
-                    <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                      <div className="text-[10px] text-slate-400">Net Earnings</div>
-                      <div className="text-xs font-extrabold text-amber-300">2,490 CZK</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Recent Bookings History */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-                  <div className="text-xs font-bold text-white">Recent P2P Reservations</div>
-                  {bookings.map((bk) => (
-                    <div
-                      key={bk.bookingId}
-                      onClick={() => setActiveScreen(4)}
-                      className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between text-xs cursor-pointer hover:border-emerald-500/50"
-                    >
-                      <div>
-                        <div className="font-bold text-white">{bk.stationTitle}</div>
-                        <div className="text-[10px] text-slate-400">
-                          {bk.bookingId} • {bk.slots.join(', ')} ({bk.energyKwh} kWh)
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-extrabold text-emerald-400">
-                          {bk.totalCostCzk.toFixed(0)} CZK
-                        </div>
-                        <div className="text-[10px] text-slate-400">{bk.status}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Bottom 5-Tab Mobile Navigation Bar */}
-          <nav className="bg-slate-900 border-t border-slate-800 px-2 py-2 grid grid-cols-5 gap-1 text-[10px] font-semibold">
-            {[
-              { screen: 1, label: 'Explore', icon: MapPin },
-              { screen: 2, label: 'Station', icon: ShieldCheck },
-              { screen: 3, label: 'Book Slot', icon: Calendar },
-              { screen: 4, label: 'Access', icon: Clock },
-              { screen: 5, label: 'Host +', icon: PlusCircle },
-              { screen: 6, label: 'Profile', icon: UserCheck }
-            ]
-              .slice(0, 5)
-              .map((item) => {
-                const Icon = item.icon;
-                const active = activeScreen === item.screen;
-                return (
-                  <button
-                    key={item.screen}
-                    onClick={() => setActiveScreen(item.screen)}
-                    className={`flex flex-col items-center justify-center py-1 rounded-xl transition ${
-                      active ? 'text-emerald-400 bg-emerald-500/10 font-bold' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4 mb-0.5" />
-                    <span>{item.label}</span>
-                  </button>
-                );
-              })}
-          </nav>
-        </div>
-
-        {/* Right Side: Thesis Defense & Database State Inspector (Hidden in Screenshot Mode) */}
-        {!screenshotMode && (
-          <DefenseInspector
-            activeScreen={activeScreen}
-            setActiveScreen={setActiveScreen}
-            selectedStation={selectedStation}
-            selectedSlots={selectedSlots}
-            bookings={bookings}
-            stations={stations}
-          />
-        )}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex items-start justify-center gap-8">
+        {scaledPhone}
+        <DefenseInspector
+          activeScreen={activeScreen}
+          setActiveScreen={setActiveScreen}
+          selectedStation={selectedStation}
+          selectedSlots={selectedSlots}
+          currentSoc={currentSoc}
+          bookings={bookings}
+          stations={stations}
+        />
       </main>
     </div>
   );
