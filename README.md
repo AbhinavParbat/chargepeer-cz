@@ -43,27 +43,30 @@ npm run preview    # serves the production build locally
 
 ```
 chargepeer-cz/
-├── index.html                 # entry page (Tailwind CDN, fonts)
-├── package.json
-├── vite.config.js
+├── README.md                 # Project overview, setup, structure, formulas
+├── .gitignore                # Excludes node_modules, dist, .DS_Store, editor files
+├── index.html                # HTML entry point, Inter typeface, Tailwind CSS
+├── package.json              # Dependencies (React 18, Leaflet, Lucide), npm scripts
+├── package-lock.json         # Locked dependency versions
+├── vite.config.js            # Vite development server (localhost:5173)
 ├── database/
-│   ├── schema.sql             # normalized PostgreSQL schema (5 tables)
-│   └── test_schema.sql        # constraint tests (e.g. double booking is rejected)
+│   ├── schema.sql            # PostgreSQL 16 schema (five tables, 3NF)
+│   └── test_schema.sql       # Constraint tests (e.g., double booking rejected)
 └── src/
-    ├── main.jsx               # React entry point
-    ├── App.jsx                # phone frame, six screens and app state
+    ├── main.jsx              # React root; imports Leaflet and map styles
+    ├── App.jsx               # Main controller and the six mobile screens
     ├── components/
-    │   ├── InteractiveMap.jsx # Leaflet map, hosts, DC hubs, gap zones, route
-    │   ├── MiniMap.jsx        # privacy-area / exact-location / picker map
-    │   ├── TripPlanner.jsx    # Prague → Berlin range check
-    │   └── DefenseInspector.jsx
+    │   ├── InteractiveMap.jsx    # Explore map: pins, gap zones, DC overlay, route
+    │   ├── MiniMap.jsx           # Privacy map, driveway pin, host location picker
+    │   ├── TripPlanner.jsx       # Prague–Berlin road-trip range check
+    │   └── DefenseInspector.jsx  # Requirement, formula, and data inspector
     ├── data/
-    │   └── mockData.js        # seeded hosts, DC hubs, trip scenario, demo user
+    │   └── mockData.js           # Stations, DC hubs, gap zones, trip, constants
     ├── lib/
-    │   ├── calc.js            # session cost, host earnings, slots, trip energy model
-    │   └── mapConfig.js       # tile layer and map markers
+    │   ├── calc.js               # Session, tariff, slot, and trip calculations
+    │   └── mapConfig.js          # Tile source, attribution, marker icons
     └── styles/
-        └── map.css
+        └── map.css               # Map marker and label styles
 ```
 
 ## Calculation model
